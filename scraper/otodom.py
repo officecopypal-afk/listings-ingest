@@ -1,0 +1,270 @@
+"""
+Otodom scraper — czyta aktywne scrape_jobs z Supabase, scrapuje listę wyników
++ pojedyncze oferty, wysyła do RPC leads_ingest_offer. Odpalane przez GitHub Actions
+co 3h; ingest idempotentny (ON CONFLICT).
+"""
+import os
+import re
+import json
+import time
+import random
+import logging
+from typing import Optional
+
+import requests
+from bs4 import BeautifulSoup
+from supabase import create_client, Client
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("otodom")
+
+MOBILE_UA = ("Mozilla/5.0 (Linux; Android 10; Pixel 3) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/88.0.4324.181 Mobile Safari/537.36")
+HEADERS = {
+    "User-Agent": MOBILE_UA,
+    "Accept-Language": "pl-PL,pl;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+TIMEOUT = 20
+MAX_PAGES = 30
+PER_REQUEST_DELAY_RANGE = (0.5, 1.5)
+
+sb: Client = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
+session = requests.Session()
+session.headers.update(HEADERS)
+
+
+def jitter_sleep():
+    time.sleep(random.uniform(*PER_REQUEST_DELAY_RANGE))
+
+
+def normalize_phone(raw: str) -> Optional[str]:
+    if not raw:
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if digits.startswith("0048"):
+        digits = digits[4:]
+    if digits.startswith("48") and len(digits) == 11:
+        digits = digits[2:]
+    if len(digits) == 9:
+        return f"+48{digits}"
+    log.warning(f"Cannot normalize phone: {raw!r}")
+    return None
+
+
+def fetch(url: str) -> Optional[str]:
+    for attempt in range(3):
+        try:
+            r = session.get(url, timeout=TIMEOUT)
+            if r.status_code == 200:
+                return r.text
+            if r.status_code == 404:
+                return None
+            log.warning(f"HTTP {r.status_code} on {url} (attempt {attempt + 1})")
+        except Exception as e:
+            log.warning(f"Fetch error {url} (attempt {attempt + 1}): {e}")
+        time.sleep(2 ** attempt)
+    return None
+
+
+def extract_listing_urls(html: str) -> set:
+    soup = BeautifulSoup(html, "html.parser")
+    urls = set()
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "/pl/oferta/" in href:
+            if href.startswith("/"):
+                href = "https://www.otodom.pl" + href
+            urls.add(href.split("?")[0].split("#")[0])
+    return urls
+
+
+def extract_next_data(html: str) -> dict:
+    soup = BeautifulSoup(html, "html.parser")
+    tag = soup.find("script", id="__NEXT_DATA__")
+    if not tag or not tag.string:
+        return {}
+    try:
+        return json.loads(tag.string)
+    except Exception as e:
+        log.warning(f"NEXT_DATA parse error: {e}")
+        return {}
+
+
+def dig(d, *keys, default=None):
+    cur = d
+    for k in keys:
+        if isinstance(cur, dict):
+            cur = cur.get(k)
+        elif isinstance(cur, list) and isinstance(k, int) and k < len(cur):
+            cur = cur[k]
+        else:
+            return default
+    return cur if cur is not None else default
+
+
+def parse_offer(url: str, property_type: str, transaction_type: str) -> Optional[dict]:
+    html = fetch(url)
+    if not html:
+        return None
+
+    data = extract_next_data(html)
+    ad = dig(data, "props", "pageProps", "ad") or {}
+
+    # phone: z NEXT_DATA.phones albo fallback tel: w DOM
+    phone = None
+    phones_list = dig(ad, "phones")
+    if isinstance(phones_list, list) and phones_list:
+        phone = normalize_phone(str(phones_list[0]))
+    if not phone:
+        soup = BeautifulSoup(html, "html.parser")
+        for a in soup.find_all("a", href=True):
+            if a["href"].lower().startswith("tel:"):
+                phone = normalize_phone(a["href"][4:])
+                if phone:
+                    break
+
+    price = dig(ad, "target", "Price")
+    try:
+        price = float(price) if price not in (None, "") else None
+    except Exception:
+        price = None
+
+    area = dig(ad, "target", "Area")
+    try:
+        area = float(str(area).replace(",", ".")) if area not in (None, "") else None
+    except Exception:
+        area = None
+
+    rooms_raw = dig(ad, "target", "Rooms_num")
+    rooms = None
+    try:
+        if isinstance(rooms_raw, list) and rooms_raw:
+            rooms = int(rooms_raw[0])
+        elif rooms_raw not in (None, ""):
+            rooms = int(rooms_raw)
+    except Exception:
+        pass
+
+    return {
+        "url": url,
+        "portal": "otodom",
+        "portal_listing_id": str(dig(ad, "id") or "") or None,
+        "property_type": property_type,
+        "transaction_type": transaction_type,
+        "phone": phone,
+        "title": dig(ad, "title"),
+        "price": price,
+        "currency": "PLN",
+        "area_m2": area,
+        "rooms": rooms,
+        "city": dig(ad, "location", "address", "city", "name"),
+        "district": dig(ad, "location", "address", "district", "name"),
+        "voivodeship": dig(ad, "location", "address", "province", "name"),
+        "owner_type": dig(ad, "advertType"),
+        "posted_at": dig(ad, "createdAt") or dig(ad, "dateCreated"),
+        "raw": {
+            "ad_id": dig(ad, "id"),
+            "category": dig(ad, "adCategory"),
+            "subcategory": dig(ad, "subcategory"),
+        },
+    }
+
+
+def scrape_job(job: dict) -> dict:
+    run = sb.schema("leads").table("scrape_runs").insert({
+        "scrape_job_id": job["id"],
+        "status": "running",
+    }).execute().data[0]
+
+    stats = {"pages": 0, "listings_found": 0, "listings_new": 0, "phones_new": 0}
+    try:
+        base_url = job["search_url"]
+        page = 1
+        seen_urls = set()
+        while page <= MAX_PAGES:
+            page_url = base_url + (f"&page={page}" if page > 1 else "")
+            log.info(f"[{job['name']}] page {page}: {page_url}")
+            html = fetch(page_url)
+            if not html:
+                break
+
+            urls = extract_listing_urls(html) - seen_urls
+            if not urls:
+                log.info(f"[{job['name']}] no new URLs on page {page}, stopping")
+                break
+            seen_urls |= urls
+            stats["pages"] += 1
+
+            for url in urls:
+                stats["listings_found"] += 1
+                offer = parse_offer(url, job["property_type"], job["transaction_type"])
+                jitter_sleep()
+                if not offer:
+                    continue
+                try:
+                    res = sb.rpc("leads_ingest_offer", {"p_offer": offer}).execute()
+                    result = res.data if isinstance(res.data, dict) else (res.data or {})
+                    if result.get("phone_is_new"):
+                        stats["phones_new"] += 1
+                    if result.get("listing_is_new"):
+                        stats["listings_new"] += 1
+                    log.info(
+                        f"[{job['name']}] {url} phone={offer['phone']} "
+                        f"sms={result.get('sms_status')}"
+                    )
+                except Exception as e:
+                    log.error(f"Ingest error {url}: {e}")
+
+            page += 1
+            jitter_sleep()
+
+        sb.schema("leads").table("scrape_runs").update({
+            "status": "success",
+            "finished_at": "now()",
+            "pages_scraped": stats["pages"],
+            "listings_found": stats["listings_found"],
+            "listings_new": stats["listings_new"],
+            "phones_new": stats["phones_new"],
+        }).eq("id", run["id"]).execute()
+
+        sb.schema("leads").table("scrape_jobs").update({
+            "last_run_at": "now()",
+            "last_run_status": "success",
+            "last_run_error": None,
+            "last_run_new_phones": stats["phones_new"],
+            "last_run_new_listings": stats["listings_new"],
+        }).eq("id", job["id"]).execute()
+
+        log.info(f"[{job['name']}] done: {stats}")
+        return stats
+
+    except Exception as e:
+        log.exception(f"Job {job['name']} failed")
+        sb.schema("leads").table("scrape_runs").update({
+            "status": "error",
+            "finished_at": "now()",
+            "error": str(e)[:1000],
+        }).eq("id", run["id"]).execute()
+        sb.schema("leads").table("scrape_jobs").update({
+            "last_run_at": "now()",
+            "last_run_status": "error",
+            "last_run_error": str(e)[:1000],
+        }).eq("id", job["id"]).execute()
+        raise
+
+
+def main():
+    jobs = sb.schema("leads").table("scrape_jobs") \
+        .select("*").eq("active", True).eq("portal", "otodom") \
+        .execute().data
+    log.info(f"Found {len(jobs)} active jobs")
+    for job in jobs:
+        try:
+            scrape_job(job)
+        except Exception:
+            continue
+
+
+if __name__ == "__main__":
+    main()
