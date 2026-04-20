@@ -172,11 +172,7 @@ def parse_offer(url: str, property_type: str, transaction_type: str) -> Optional
 
 
 def scrape_job(job: dict) -> dict:
-    run = sb.schema("leads").table("scrape_runs").insert({
-        "scrape_job_id": job["id"],
-        "status": "running",
-    }).execute().data[0]
-
+    run_id = sb.rpc("leads_start_run", {"p_job_id": job["id"]}).execute().data
     stats = {"pages": 0, "listings_found": 0, "listings_new": 0, "phones_new": 0}
     try:
         base_url = job["search_url"]
@@ -219,45 +215,39 @@ def scrape_job(job: dict) -> dict:
             page += 1
             jitter_sleep()
 
-        sb.schema("leads").table("scrape_runs").update({
-            "status": "success",
-            "finished_at": "now()",
-            "pages_scraped": stats["pages"],
-            "listings_found": stats["listings_found"],
-            "listings_new": stats["listings_new"],
-            "phones_new": stats["phones_new"],
-        }).eq("id", run["id"]).execute()
-
-        sb.schema("leads").table("scrape_jobs").update({
-            "last_run_at": "now()",
-            "last_run_status": "success",
-            "last_run_error": None,
-            "last_run_new_phones": stats["phones_new"],
-            "last_run_new_listings": stats["listings_new"],
-        }).eq("id", job["id"]).execute()
-
+        sb.rpc("leads_finalize_run", {
+            "p_run_id": run_id,
+            "p_job_id": job["id"],
+            "p_status": "success",
+            "p_pages": stats["pages"],
+            "p_listings_found": stats["listings_found"],
+            "p_listings_new": stats["listings_new"],
+            "p_phones_new": stats["phones_new"],
+            "p_error": None,
+        }).execute()
         log.info(f"[{job['name']}] done: {stats}")
         return stats
 
     except Exception as e:
         log.exception(f"Job {job['name']} failed")
-        sb.schema("leads").table("scrape_runs").update({
-            "status": "error",
-            "finished_at": "now()",
-            "error": str(e)[:1000],
-        }).eq("id", run["id"]).execute()
-        sb.schema("leads").table("scrape_jobs").update({
-            "last_run_at": "now()",
-            "last_run_status": "error",
-            "last_run_error": str(e)[:1000],
-        }).eq("id", job["id"]).execute()
+        try:
+            sb.rpc("leads_finalize_run", {
+                "p_run_id": run_id,
+                "p_job_id": job["id"],
+                "p_status": "error",
+                "p_pages": stats["pages"],
+                "p_listings_found": stats["listings_found"],
+                "p_listings_new": stats["listings_new"],
+                "p_phones_new": stats["phones_new"],
+                "p_error": str(e)[:1000],
+            }).execute()
+        except Exception:
+            pass
         raise
 
 
 def main():
-    jobs = sb.schema("leads").table("scrape_jobs") \
-        .select("*").eq("active", True).eq("portal", "otodom") \
-        .execute().data
+    jobs = sb.rpc("leads_get_active_jobs", {"p_portal": "otodom"}).execute().data or []
     log.info(f"Found {len(jobs)} active jobs")
     for job in jobs:
         try:
