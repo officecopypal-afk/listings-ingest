@@ -111,12 +111,19 @@ def parse_offer(url: str, property_type: str, transaction_type: str) -> Optional
     data = extract_next_data(html)
     ad = dig(data, "props", "pageProps", "ad") or {}
 
-    # phone: z NEXT_DATA.phones albo fallback tel: w DOM
+    # phone: 2026-05-26 — Otodom przeniósł phones z ad.phones na
+    # ad.contactDetails.phones (i duplikat w ad.owner.phones). Stary ad.phones
+    # zwraca teraz None → scraper graceful-failował na phone=None od 25.05 ~17:00.
+    # Sprawdzamy wszystkie 3 lokalizacje (contactDetails najpierw — kanoniczna).
     phone = None
-    phones_list = dig(ad, "phones")
-    if isinstance(phones_list, list) and phones_list:
-        phone = normalize_phone(str(phones_list[0]))
+    for path in (("contactDetails", "phones"), ("owner", "phones"), ("phones",)):
+        phones_list = dig(ad, *path)
+        if isinstance(phones_list, list) and phones_list:
+            phone = normalize_phone(str(phones_list[0]))
+            if phone:
+                break
     if not phone:
+        # Fallback: tel: link w DOM (rzadko renderowane, ale defensive)
         soup = BeautifulSoup(html, "html.parser")
         for a in soup.find_all("a", href=True):
             if a["href"].lower().startswith("tel:"):
