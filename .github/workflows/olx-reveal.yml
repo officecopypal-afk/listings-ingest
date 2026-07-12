@@ -42,9 +42,9 @@ jobs:
           OLX_FP: ${{ secrets.OLX_FP }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          MAX: ${{ github.event.inputs.max || '60' }}
-          CONCURRENCY: ${{ github.event.inputs.concurrency || '6' }}
-          CAP_PER_IP: ${{ github.event.inputs.cap_per_ip || '5' }}
+          MAX: ${{ github.event.inputs.max || '80' }}
+          CONCURRENCY: ${{ github.event.inputs.concurrency || '5' }}
+          CAP_PER_IP: ${{ github.event.inputs.cap_per_ip || '1' }}
           MAX_IP_TRIES: "4"
         run: node revealer.mjs
       - name: Slack alert on failure

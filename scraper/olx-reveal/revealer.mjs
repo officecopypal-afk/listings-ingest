@@ -19,10 +19,10 @@ const SB_URL = (process.env.SUPABASE_URL || '').trim();
 const SB_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 const CONCURRENCY = Number(process.env.CONCURRENCY || 6);
 const MAX = Number(process.env.MAX || 120);
-const CAP_PER_IP = Number(process.env.CAP_PER_IP || 5);
+const CAP_PER_IP = Number(process.env.CAP_PER_IP || 1); // 1 IP na 1 link (ludzko + minimum palenia); fallback: podbić na 3/5
 const MAX_IP_TRIES = Number(process.env.MAX_IP_TRIES || 4);
 const TIMEOUT = Number(process.env.FETCH_TIMEOUT_MS || 15000);
-const COOLDOWN_H = Number(process.env.IP_COOLDOWN_HOURS || 6);
+const COOLDOWN_H = Number(process.env.IP_COOLDOWN_HOURS || 12);
 const LOOP = process.env.LOOP_UNTIL_EMPTY === '1';
 const BUDGET_MS = Number(process.env.RUN_BUDGET_MS || 19 * 60 * 1000);
 const DEFER_MIN = Number(process.env.DEFER_MIN || 25);

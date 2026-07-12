@@ -38,8 +38,8 @@ jobs:
           LOOP_UNTIL_EMPTY: "1"
           RUN_BUDGET_MS: "20400000"
           MAX: ${{ github.event.inputs.max || '200' }}
-          CONCURRENCY: ${{ github.event.inputs.concurrency || '20' }}
-          CAP_PER_IP: "5"
+          CONCURRENCY: ${{ github.event.inputs.concurrency || '10' }}
+          CAP_PER_IP: "1"
           MAX_IP_TRIES: "4"
           DEFER_MIN: "25"
         run: node revealer.mjs
