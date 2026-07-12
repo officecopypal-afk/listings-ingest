@@ -1,0 +1,44 @@
+name: OLX reveal (Faza 2)
+
+on:
+  workflow_dispatch:
+    inputs:
+      max:
+        description: "Ile ogłoszeń z kolejki"
+        default: "12"
+      reveals_per_ip:
+        description: "Reveali na jedno proxy IP (1 = świeże IP każdy)"
+        default: "1"
+      delay_ms:
+        description: "Odstęp między revealami (ms)"
+        default: "8000"
+  # schedule: włączymy po potwierdzeniu przepustowości
+  #   - cron: "*/15 * * * *"
+
+concurrency:
+  group: olx-reveal
+  cancel-in-progress: false
+
+jobs:
+  reveal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: scraper/olx-reveal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - name: reveal
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          OLX_FP: ${{ secrets.OLX_FP }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MAX: ${{ github.event.inputs.max }}
+          REVEALS_PER_IP: ${{ github.event.inputs.reveals_per_ip }}
+          DELAY_MS: ${{ github.event.inputs.delay_ms }}
+        run: node revealer.mjs
