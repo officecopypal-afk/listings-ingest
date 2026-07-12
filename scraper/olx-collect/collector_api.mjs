@@ -88,7 +88,7 @@ for (const job of jobs || []) {
         const pid = listingId(url);
         if (!pid || seen.has(pid)) continue;
         seen.add(pid); found++;
-        const offer = { url, portal: 'olx', portal_listing_id: pid, property_type: job.property_type, transaction_type: job.transaction_type, title: (o.title || '').replace(/\s+/g, ' ').trim().slice(0, 140), phone: null, raw: { source: 'olx-collector-api' } };
+        const offer = { url, portal: 'olx', portal_listing_id: pid, property_type: job.property_type, transaction_type: job.transaction_type, title: (o.title || '').replace(/\s+/g, ' ').trim().slice(0, 140), posted_at: o.created_time || null, phone: null, raw: { source: 'olx-collector-api' } };
         try {
           const res = await rpc('leads_ingest_offer', { p_offer: offer });
           if (res?.listing_is_new) { added++; newThisPage++; }
