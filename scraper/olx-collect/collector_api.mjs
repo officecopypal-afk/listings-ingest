@@ -15,7 +15,7 @@ import crypto from 'crypto';
 const PROXY = process.env.IPROYAL_PROXY;
 const SB_URL = (process.env.SUPABASE_URL || '').trim();
 const SB_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-const MAX_PAGES = Number(process.env.MAX_PAGES || 6);
+const MAX_PAGES = Number(process.env.MAX_PAGES || 20); // sufit; realnie stop po 2 stronach bez nowych
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
 
 const CAT = {
@@ -58,7 +58,9 @@ for (const job of jobs || []) {
   let pagesN = 0, found = 0, added = 0;
   const seen = new Set();
   try {
-    // ZAWSZE pełne MAX_PAGES (bez wczesnego stopu) — gwarancja braku dziur; dedup po url chroni przed duplikatami
+    // skanuj aż 2 strony Z RZĘDU bez NOWYCH = dogoniliśmy poprzedni zbiór (nakładka → zero luki).
+    // sufit MAX_PAGES chroni przed runaway; przy skoku schodzi głębiej, normalnie stop po 2-3 str.
+    let emptyStreak = 0;
     for (let pg = 0; pg < MAX_PAGES; pg++) {
       const data = await apiPage(cfg.cat, cfg.secondary, pg * 40);
       if (!data.length) break;
@@ -77,6 +79,7 @@ for (const job of jobs || []) {
         } catch (e) { console.error('  ingest err', pid, String(e.message).slice(0, 100)); }
       }
       console.log(`[${job.name}] str.${pg + 1}: ${data.length} ofert, +${newThisPage} nowych`);
+      if (newThisPage === 0) { if (++emptyStreak >= 2) { console.log(`[${job.name}] dogoniłem (2 str. bez nowych) — stop`); break; } } else emptyStreak = 0;
       await sleep(300 + Math.random() * 500);
     }
     await rpc('leads_finalize_run', { p_run_id: runId, p_job_id: job.id, p_status: 'success', p_pages: pagesN, p_listings_found: found, p_listings_new: added, p_phones_new: 0, p_error: null });
