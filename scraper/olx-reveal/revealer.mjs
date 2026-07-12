@@ -47,7 +47,9 @@ async function rpc(fn, body) {
 
 // FINGERPRINT CAPTURE — pasywnie z page-load requestów OLX (bez klika, bez logowania)
 async function captureFingerprint() {
-  const browser = await chromium.launch({ headless: true, proxy: pwProxy(), args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'] });
+  // BEZ proxy — przeglądarka przez residential proxy timeoutuje; fp jest IP-niezależny,
+  // a reveal i tak leci przez proxy. Runner IP tylko przegląda (OLX nie blokuje browsingu).
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'] });
   try {
     const ctx = await browser.newContext({ locale: 'pl-PL', timezoneId: 'Europe/Warsaw', viewport: { width: 1366, height: 900 }, userAgent: UA });
     const page = await ctx.newPage();
