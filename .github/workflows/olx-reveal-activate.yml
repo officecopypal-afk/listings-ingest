@@ -7,9 +7,10 @@ on:
     inputs:
       max:
         description: "Batch (ofert na obieg)"
-        default: "120"
-      delay_ms:
-        default: "800"
+        default: "200"
+      concurrency:
+        description: "Ile workerów równolegle"
+        default: "20"
 
 concurrency:
   group: olx-reveal
@@ -36,8 +37,8 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           LOOP_UNTIL_EMPTY: "1"
           RUN_BUDGET_MS: "20400000"
-          MAX: ${{ github.event.inputs.max || '150' }}
-          CONCURRENCY: "8"
+          MAX: ${{ github.event.inputs.max || '200' }}
+          CONCURRENCY: ${{ github.event.inputs.concurrency || '20' }}
           CAP_PER_IP: "5"
           MAX_IP_TRIES: "4"
           DEFER_MIN: "25"
