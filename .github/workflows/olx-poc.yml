@@ -6,8 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       listing_url:
-        description: "Pełny URL aktywnej oferty OLX (prywatna, z listy najnowszych)"
-        required: true
+        description: "URL konkretnej oferty OLX (opcjonalnie; puste = weź świeżą z search)"
+        required: false
+        default: ""
 
 jobs:
   poc:

@@ -1,36 +1,25 @@
 /**
- * PoC reveala numeru OLX — SPIKE (nie produkcja).
+ * PoC reveala numeru OLX — SPIKE (nie produkcja). v2: bierze świeżą ofertę z search
+ * (test Fazy 1 przy okazji), dłużej czeka na hydrację, i wypluwa strukturę przycisków
+ * kontaktu gdy nie trafi selektorem.
  *
- * Cel: zweryfikować EMPIRYCZNIE w docelowym środowisku (GH Actions + IPRoyal PL residential):
- *   1) czy patchright + proxy przechodzi OLX "friction" bez CAPTCHy (challenge.type == "blank"),
- *   2) czy reveal DZIAŁA BEZ LOGOWANIA (limited-phones 200 + numer) czy wymaga konta,
- *   3) realny czas jednego reveala.
+ * Weryfikuje: (1) friction bez CAPTCHy (challenge.type=="blank"), (2) czy reveal działa
+ * BEZ logowania (limited-phones 200 + numer), (3) czas.
+ * Flow (z HAR): klik "Pokaż numer" -> friction /challenge -> /exchange (JWT 15s, IP-bound)
+ *   -> GET /api/v1/offers/{id}/limited-phones/ -> {"data":{"phones":["NNN NNN NNN"]}}.
  *
- * Flow reveala (odtworzony z HAR):
- *   klik "Pokaż numer"
- *     -> POST friction.olxgroup.com/challenge  -> {context, challenge.type}
- *     -> POST friction.olxgroup.com/exchange   -> {token}  (JWT ~15s, przypięty do IP + ad_id)
- *     -> GET  www.olx.pl/api/v1/offers/{id}/limited-phones/  (nagłówek friction-token + x-fingerprint)
- *        -> {"data":{"phones":["NNN NNN NNN"]}}
- * OLX-owy JS robi to sam po kliknięciu — my tylko przechwytujemy odpowiedzi.
- *
- * Uruchomienie:
- *   IPROYAL_PROXY="http://USER:PASS_country-pl@geo.iproyal.com:12321" \
- *   OLX_LISTING_URL="https://www.olx.pl/d/oferta/...-IDxxxx.html" \
- *   node reveal_poc.mjs
+ * Env: IPROYAL_PROXY (wymagane). OLX_LISTING_URL (opcj. — konkretna oferta) LUB
+ *      OLX_SEARCH_URL (opcj. — domyślnie mieszkania/sprzedaż prywatne najnowsze).
  */
 import { chromium } from 'patchright';
 
-const LISTING_URL = process.env.OLX_LISTING_URL;
 const RAW_PROXY = process.env.IPROYAL_PROXY;
-if (!LISTING_URL || !RAW_PROXY) {
-  console.error('Wymagane env: OLX_LISTING_URL, IPROYAL_PROXY');
-  process.exit(1);
-}
+if (!RAW_PROXY) { console.error('Wymagane env: IPROYAL_PROXY'); process.exit(1); }
+const SEARCH_URL = process.env.OLX_SEARCH_URL ||
+  'https://www.olx.pl/nieruchomosci/mieszkania/sprzedaz/?search%5Bprivate_business%5D=private&search%5Border%5D=created_at:desc&search%5Bfilter_enum_market%5D%5B0%5D=secondary';
+let LISTING_URL = process.env.OLX_LISTING_URL || '';
 
-// IPRoyal sticky session: doklejamy _session-<rand>_lifetime-5m do hasła, żeby CAŁY reveal
-// (challenge -> exchange -> limited-phones) leciał z JEDNEGO IP. friction-token jest IP-bound
-// i żyje ~15s, więc rotacja per-request ("Randomize IP") by go unieważniła.
+// IPRoyal sticky session: ten sam IP na cały reveal (friction-token IP-bound, 15s).
 function toStickyProxy(raw) {
   const m = raw.match(/^https?:\/\/([^:]+):([^@]+)@([^:]+):(\d+)$/);
   if (!m) throw new Error('IPROYAL_PROXY format: http://user:pass@host:port');
@@ -43,104 +32,91 @@ const proxy = toStickyProxy(RAW_PROXY);
 const cap = { challengeType: null, exchangeOk: null, phonesStatus: null, phones: null };
 
 const browser = await chromium.launch({
-  headless: true,
-  proxy,
+  headless: true, proxy,
   args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'],
 });
 const ctx = await browser.newContext({
-  locale: 'pl-PL',
-  timezoneId: 'Europe/Warsaw',
-  viewport: { width: 1366, height: 900 },
-  userAgent:
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  locale: 'pl-PL', timezoneId: 'Europe/Warsaw', viewport: { width: 1366, height: 900 },
+  userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
 });
 const page = await ctx.newPage();
 
-// Oszczędzamy GB proxy: blokujemy grafikę/media/fonty/css. SKRYPTY MUSZĄ zostać — friction
-// liczy fingerprint z JS. (~0,3-0,7 MB/ofertę zamiast kilku MB.)
-await page.route('**/*', (route) => {
-  const t = route.request().resourceType();
-  return ['image', 'media', 'font', 'stylesheet'].includes(t) ? route.abort() : route.continue();
-});
+// Oszczędzamy GB: blokujemy grafikę/media/fonty/css (skrypty zostają — friction je liczy).
+await page.route('**/*', (r) => (['image', 'media', 'font', 'stylesheet'].includes(r.request().resourceType()) ? r.abort() : r.continue()));
 
-// Przechwytujemy odpowiedzi friction + reveal.
 page.on('response', async (res) => {
   const u = res.url();
   try {
-    if (u.includes('friction.olxgroup.com/challenge')) {
-      const j = await res.json().catch(() => null);
-      cap.challengeType = j?.challenge?.type ?? '(nieznany)';
-    } else if (u.includes('friction.olxgroup.com/exchange')) {
-      cap.exchangeOk = res.ok();
-    } else if (u.includes('/limited-phones/')) {
-      cap.phonesStatus = res.status();
-      cap.phones = await res.json().catch(() => null);
-    }
+    if (u.includes('friction.olxgroup.com/challenge')) cap.challengeType = (await res.json().catch(() => null))?.challenge?.type ?? '(nieznany)';
+    else if (u.includes('friction.olxgroup.com/exchange')) cap.exchangeOk = res.ok();
+    else if (u.includes('/limited-phones/')) { cap.phonesStatus = res.status(); cap.phones = await res.json().catch(() => null); }
   } catch {}
 });
 
-const t0 = Date.now();
-console.log('→ ładuję ofertę przez PL residential:', LISTING_URL);
-await page.goto(LISTING_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
-
-// Baner cookies (best-effort, nie blokuje).
-try {
-  const c = page.getByRole('button', { name: /akceptuj|zgadzam|zaakceptuj/i }).first();
-  if (await c.isVisible({ timeout: 3000 })) await c.click();
-} catch {}
-
-// Klik "Pokaż numer" — kilka fallbacków (OLX zmienia selektory).
-let clicked = false;
-const candidates = [
-  page.getByTestId('show-phone'),
-  page.getByRole('button', { name: /pokaż numer|wyświetl numer|zobacz numer/i }).first(),
-  page.locator('[data-testid="contact-phone"]').first(),
-  page.getByText(/pokaż numer/i).first(),
-];
-for (const loc of candidates) {
-  try {
-    if (await loc.isVisible({ timeout: 4000 })) {
-      await loc.click();
-      clicked = true;
-      break;
-    }
-  } catch {}
+async function acceptCookies() {
+  for (const name of [/akceptuj/i, /zgadzam/i, /zaakceptuj/i, /accept/i]) {
+    try { const b = page.getByRole('button', { name }).first(); if (await b.isVisible({ timeout: 2000 })) { await b.click(); return; } } catch {}
+  }
 }
-console.log(clicked ? '→ kliknięto "Pokaż numer"' : '⚠ nie znalazłem przycisku (sprawdzę selektor po pierwszym runie)');
 
-// Ściana logowania? (modal / redirect)
-let loginWall = false;
-try {
-  const l = page.getByRole('button', { name: /zaloguj/i }).first();
-  if (await l.isVisible({ timeout: 2500 })) loginWall = true;
-} catch {}
-if (/\/login|account\.olx/i.test(page.url())) loginWall = true;
+const t0 = Date.now();
 
-// Czekamy na limited-phones do ~12s.
-for (let i = 0; i < 24 && cap.phonesStatus === null; i++) await page.waitForTimeout(500);
+// FAZA 1 mini: jak nie podano oferty, weź pierwszą świeżą z search.
+if (!LISTING_URL) {
+  console.log('→ search (świeża oferta):', SEARCH_URL);
+  await page.goto(SEARCH_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await acceptCookies();
+  try { await page.waitForSelector('a[href*="/d/oferta/"]', { timeout: 15000 }); } catch {}
+  LISTING_URL = await page.evaluate(() => {
+    const a = [...document.querySelectorAll('a[href*="/d/oferta/"]')].map((x) => x.href).find((h) => h.includes('olx.pl'));
+    return a || '';
+  });
+  console.log(LISTING_URL ? '→ wybrana oferta: ' + LISTING_URL : '⚠ nie wyciągnąłem oferty z search (możliwy blok/friction na liście)');
+}
 
-const ms = Date.now() - t0;
-const gotPhone = cap.phonesStatus === 200 && Array.isArray(cap.phones?.data?.phones) && cap.phones.data.phones.length > 0;
+if (LISTING_URL) {
+  await page.goto(LISTING_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await acceptCookies();
+  console.log('final URL :', page.url());
+  console.log('title     :', await page.title());
 
-console.log('\n===== DIAGNOZA =====');
-console.log('friction challenge.type :', cap.challengeType ?? '(brak — friction nie ruszył?)');
-console.log('friction exchange ok    :', cap.exchangeOk ?? '(brak)');
-console.log('limited-phones status   :', cap.phonesStatus ?? '(brak odpowiedzi)');
-console.log('numer                   :', gotPhone ? cap.phones.data.phones.join(', ') : '(brak)');
-console.log('ściana logowania?       :', loginWall ? 'TAK' : 'nie wykryto');
-console.log('czas                    :', ms + 'ms');
-console.log(
-  '\nWNIOSEK:',
-  gotPhone
-    ? '✅ REVEAL BEZ LOGOWANIA DZIAŁA — konta zbędne, idziemy anonimowo + rotacja IP.'
-    : loginWall
-    ? '🔒 Wymaga logowania — wchodzą konta (logowanie przed revealem).'
-    : cap.challengeType && cap.challengeType !== 'blank'
-    ? `⚠ friction rzucił wyzwanie "${cap.challengeType}" — trzeba mocniejszy stealth (headful+xvfb / real Chrome) albo solver.`
-    : cap.phonesStatus && cap.phonesStatus >= 400
-    ? `⚠ limited-phones ${cap.phonesStatus} — limit/login/friction, patrz logi.`
-    : '❓ Niejednoznaczne — przycisk mógł się nie znaleźć; podejrzę strukturę strony i poprawię selektor.'
-);
+  // Klik "Pokaż numer" — czekamy na hydrację (React) do 12s.
+  let clicked = false;
+  const btn = page.getByText(/poka[zż] numer/i).first();
+  try { await btn.waitFor({ state: 'visible', timeout: 12000 }); await btn.click(); clicked = true; console.log('→ kliknięto "Pokaż numer"'); } catch {}
+  if (!clicked) {
+    for (const loc of [page.getByTestId('show-phone'), page.locator('[data-testid*="phone"]').first(), page.getByRole('button', { name: /numer|zadzwoń|kontakt/i }).first()]) {
+      try { if (await loc.isVisible({ timeout: 2000 })) { await loc.click(); clicked = true; console.log('→ kliknięto (fallback)'); break; } } catch {}
+    }
+  }
+  if (!clicked) {
+    // DIAGNOSTYKA: wypluj kandydatów kontaktu, żeby poprawić selektor.
+    const diag = await page.evaluate(() => {
+      const els = [...document.querySelectorAll('button, a, [data-testid], [data-cy]')];
+      return els.filter((e) => /numer|telefon|pokaż|kontakt|zadzwoń|phone|contact/i.test(((e.innerText || '') + ' ' + (e.getAttribute('data-testid') || '') + ' ' + (e.getAttribute('data-cy') || ''))))
+        .slice(0, 15).map((e) => ({ tag: e.tagName, testid: e.getAttribute('data-testid') || e.getAttribute('data-cy') || null, text: (e.innerText || '').replace(/\s+/g, ' ').slice(0, 45) }));
+    });
+    console.log('KANDYDACI kontaktu:', JSON.stringify(diag));
+  }
 
-await browser.close();
-process.exit(gotPhone ? 0 : 1);
+  // Ściana logowania?
+  let loginWall = false;
+  try { if (await page.getByRole('button', { name: /zaloguj/i }).first().isVisible({ timeout: 2500 })) loginWall = true; } catch {}
+  if (/\/login|account\.olx/i.test(page.url())) loginWall = true;
+
+  for (let i = 0; i < 24 && cap.phonesStatus === null; i++) await page.waitForTimeout(500);
+
+  const gotPhone = cap.phonesStatus === 200 && Array.isArray(cap.phones?.data?.phones) && cap.phones.data.phones.length > 0;
+  console.log('\n===== DIAGNOZA =====');
+  console.log('friction challenge.type :', cap.challengeType ?? '(brak — reveal nie ruszył)');
+  console.log('limited-phones status   :', cap.phonesStatus ?? '(brak)');
+  console.log('numer                   :', gotPhone ? cap.phones.data.phones.join(', ') : '(brak)');
+  console.log('ściana logowania?       :', loginWall ? 'TAK' : 'nie');
+  console.log('czas                    :', (Date.now() - t0) + 'ms');
+  console.log('\nWNIOSEK:', gotPhone ? '✅ REVEAL BEZ LOGOWANIA DZIAŁA.' : loginWall ? '🔒 Wymaga logowania.' : cap.challengeType && cap.challengeType !== 'blank' ? `⚠ friction "${cap.challengeType}".` : '❓ Patrz KANDYDACI/final URL powyżej.');
+  await browser.close();
+  process.exit(gotPhone ? 0 : 1);
+} else {
+  await browser.close();
+  process.exit(1);
+}
