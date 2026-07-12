@@ -54,9 +54,10 @@ for (const job of jobs || []) {
   const cfg = CAT[`${job.property_type}|${job.transaction_type}`];
   if (!cfg) { console.warn(`[${job.name}] brak mapowania category_id — pomijam`); continue; }
   const runId = await rpc('leads_start_run', { p_job_id: job.id });
-  let pagesN = 0, found = 0, added = 0, zeroStreak = 0;
+  let pagesN = 0, found = 0, added = 0;
   const seen = new Set();
   try {
+    // ZAWSZE pełne MAX_PAGES (bez wczesnego stopu) — gwarancja braku dziur; dedup po url chroni przed duplikatami
     for (let pg = 0; pg < MAX_PAGES; pg++) {
       const data = await apiPage(cfg.cat, cfg.secondary, pg * 40);
       if (!data.length) break;
@@ -75,7 +76,6 @@ for (const job of jobs || []) {
         } catch (e) { console.error('  ingest err', pid, String(e.message).slice(0, 100)); }
       }
       console.log(`[${job.name}] str.${pg + 1}: ${data.length} ofert, +${newThisPage} nowych`);
-      if (newThisPage === 0) { if (++zeroStreak >= 2) break; } else zeroStreak = 0;
       await sleep(300 + Math.random() * 500);
     }
     await rpc('leads_finalize_run', { p_run_id: runId, p_job_id: job.id, p_status: 'success', p_pages: pagesN, p_listings_found: found, p_listings_new: added, p_phones_new: 0, p_error: null });

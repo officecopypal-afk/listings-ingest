@@ -2,8 +2,9 @@ name: OLX collect (Faza 1)
 # Kolektor linków OLX — zbiera nowe organiczne oferty do leads (phone_id=null).
 # Nie loguje się, nie robi reveali → zero throttlingu. Często, bo "na bieżąco".
 on:
-  schedule:
-    - cron: "17 */3 * * *"   # co 3h — BACKSTOP (główny to olx-collect-api przez API JSON); łapie edge-case sortowania
+  # WYŁĄCZONY cron — główny i kompletny kolektor to olx-collect-api (API JSON, kat 14/15/18).
+  # Wersja przeglądarkowa zbierała też ŚMIECI z full-text search (usługi/ubrania/kaski),
+  # więc jako backstop tylko zaśmiecała kolejkę. Zostaje jako narzędzie ręczne (awaryjne).
   workflow_dispatch: {}
 
 concurrency:
