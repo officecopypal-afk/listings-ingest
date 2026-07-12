@@ -1,30 +1,24 @@
-name: OLX reveal (Faza 2)
-# Czysty fetch (bez przeglądarki). Throttle jest PER-IP (~5/IP) → rotacja proxy IP.
-# Numer → leads_ingest_offer → auto-SMS.
+name: OLX reveal AKTYWACJA (ciągły)
+# Jednorazowy ciągły przelot CAŁEJ bazy (pętla aż kolejka pusta i brak odroczonych).
+# Ten sam concurrency group co zwykły cron → nie dublują się. Po skończeniu cron leci dalej na bieżąco.
 
 on:
   workflow_dispatch:
     inputs:
       max:
-        description: "Ile ogłoszeń z kolejki"
-        default: "60"
-      cap_per_ip:
-        description: "Reveali na jedno IP (proaktywna rotacja pod limitem ~5)"
-        default: "4"
+        description: "Batch (ofert na obieg)"
+        default: "120"
       delay_ms:
-        description: "Odstęp między revealami (ms)"
-        default: "2500"
-  schedule:
-    - cron: "*/10 * * * *"   # co 10 min — nocny przelot całej bazy; pamięć wypalonych IP omija spalone
+        default: "800"
 
 concurrency:
   group: olx-reveal
   cancel-in-progress: false
 
 jobs:
-  reveal:
+  activate:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 350
     defaults:
       run:
         working-directory: scraper/olx-reveal
@@ -34,16 +28,19 @@ jobs:
         with:
           node-version: "22"
       - run: npm install --no-audit --no-fund
-      - name: reveal
+      - name: reveal (ciągły)
         env:
           IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
           OLX_FP: ${{ secrets.OLX_FP }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          MAX: ${{ github.event.inputs.max || '50' }}
-          CAP_PER_IP: ${{ github.event.inputs.cap_per_ip || '4' }}
+          LOOP_UNTIL_EMPTY: "1"
+          RUN_BUDGET_MS: "20400000"
+          MAX: ${{ github.event.inputs.max || '120' }}
+          CAP_PER_IP: "4"
           MAX_IP_TRIES: "4"
-          DELAY_MS: ${{ github.event.inputs.delay_ms || '2500' }}
+          DELAY_MS: ${{ github.event.inputs.delay_ms || '800' }}
+          DEFER_MIN: "25"
         run: node revealer.mjs
       - name: Slack alert on failure
         if: failure()
@@ -53,5 +50,5 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WF: ${{ github.workflow }}
         run: |
-          payload=$(printf '{"text":":red_circle: *Bot numerów — FAIL*\\n*%s* padł na cronie\\n<%s|Otwórz log w GitHub Actions>"}' "$WF" "$RUN_URL")
+          payload=$(printf '{"text":":red_circle: *Bot numerów — FAIL*\\n*%s* padł\\n<%s|Otwórz log w GitHub Actions>"}' "$WF" "$RUN_URL")
           curl -sS -X POST "$SUPABASE_URL/functions/v1/scraper-alert" -H "authorization: Bearer $SRK" -H 'content-type: application/json' -d "$payload" || true
