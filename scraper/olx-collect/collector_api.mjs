@@ -5,9 +5,12 @@
  * co kolektor-przeglądarkowy, tylko taniej. Numer dochodzi w Fazie 2.
  *
  * Mapowanie (zmapowane 12.07 z API): mieszkanie/sprzedaz=14(+wtórny), mieszkanie/wynajem=15, dom/sprzedaz=18(+wtórny).
- * Stop dopiero po 2 pustych stronach z rzędu (promowane przypięte na górze mimo sortowania).
+ * Sort: OLX honoruje `sort_by=created_at:desc` jako `last_refresh_time` malejąco (organiczne: 0 inwersji;
+ * promowane top_ad wstrzykiwane w feed). `created_time` = prawdziwa data WYSTAWIENia (created<=refresh).
+ * Tryb bieżący: stop po 2 pustych stronach (nakładka). Tryb backfill (SINCE_DATE): zbieraj created>=data,
+ * stop gdy najnowszy organiczny refresh < data (bo created<=refresh → poza oknem nic już nie wystawiono).
  *
- * Env: IPROYAL_PROXY(opcj), SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, MAX_PAGES(6).
+ * Env: IPROYAL_PROXY(opcj), SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, MAX_PAGES(20), SINCE_DATE(ISO, backfill).
  */
 import { ProxyAgent } from 'undici';
 import crypto from 'crypto';
@@ -15,8 +18,8 @@ import crypto from 'crypto';
 const PROXY = process.env.IPROYAL_PROXY;
 const SB_URL = (process.env.SUPABASE_URL || '').trim();
 const SB_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-const MAX_PAGES = Number(process.env.MAX_PAGES || 20); // sufit; realnie stop po 2 stronach bez nowych
-const SINCE_DAYS = Number(process.env.SINCE_DAYS || 0); // >0 (backfill): stop gdy ogłoszenia starsze niż N dni
+const MAX_PAGES = Number(process.env.MAX_PAGES || 20); // sufit; realnie stop po 2 stronach bez nowych / na granicy okna
+const SINCE_DATE = (process.env.SINCE_DATE || '').trim(); // ISO (backfill): zbieraj wystawione od tej daty; stop gdy organiczny refresh < data
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
 
 const CAT = {
@@ -25,6 +28,7 @@ const CAT = {
   'dom|sprzedaz': { cat: 18, secondary: true },
 };
 const listingId = (url) => { const m = url.match(/-ID([0-9A-Za-z]+)\.html/i); return m ? m[1] : null; };
+const isPromo = (o) => !!(o.promotion && o.promotion.top_ad); // wyróżnione/przypięte — pomijamy przy wyznaczaniu granicy sortu
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const pm = PROXY ? PROXY.match(/^https?:\/\/([^:]+):([^@]+)@([^:]+):(\d+)$/) : null;
@@ -41,8 +45,9 @@ async function rpc(fn, body) {
   if (!r.ok) throw new Error(`${fn} ${r.status}: ${t.slice(0, 150)}`);
   return t ? JSON.parse(t) : null;
 }
+const LIMIT = 50;
 async function apiPage(cat, secondary, offset) {
-  let u = `https://www.olx.pl/api/v1/offers/?offset=${offset}&limit=40&category_id=${cat}&sort_by=created_at%3Adesc`;
+  let u = `https://www.olx.pl/api/v1/offers/?offset=${offset}&limit=${LIMIT}&category_id=${cat}&sort_by=created_at%3Adesc`;
   if (secondary) u += '&filter_enum_market%5B0%5D=secondary';
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
@@ -67,16 +72,18 @@ for (const job of jobs || []) {
   try {
     // skanuj aż 2 strony Z RZĘDU bez NOWYCH = dogoniliśmy poprzedni zbiór (nakładka → zero luki).
     // sufit MAX_PAGES chroni przed runaway; przy skoku schodzi głębiej, normalnie stop po 2-3 str.
-    let emptyStreak = 0;
-    const cutoff = SINCE_DAYS ? Date.now() - SINCE_DAYS * 86400000 : 0;
+    let emptyStreak = 0, pastBoundary = 0;
+    const cutoffMs = SINCE_DATE ? new Date(SINCE_DATE).getTime() : 0;
     for (let pg = 0; pg < MAX_PAGES; pg++) {
-      const data = await apiPage(cfg.cat, cfg.secondary, pg * 40);
+      const data = await apiPage(cfg.cat, cfg.secondary, pg * LIMIT);
       if (!data || !data.length) { console.log(`[${job.name}] koniec wyników API (str.${pg + 1})`); break; }
       pagesN++;
-      let newThisPage = 0, pageHasRecent = !cutoff;
+      let newThisPage = 0, maxOrgRefresh = 0;
       for (const o of data) {
-        if (cutoff && o.created_time && new Date(o.created_time).getTime() >= cutoff) pageHasRecent = true;
+        // granicę okna liczymy po ORGANICZNYCH (feed malejący po last_refresh_time; promowane mają chaotyczny refresh)
+        if (cutoffMs && !isPromo(o) && o.last_refresh_time) { const rf = new Date(o.last_refresh_time).getTime(); if (rf > maxOrgRefresh) maxOrgRefresh = rf; }
         if (o.business !== false) continue;              // tylko prywatne
+        if (cutoffMs && (!o.created_time || new Date(o.created_time).getTime() < cutoffMs)) continue; // backfill: tylko WYSTAWIONE od daty
         const url = (o.url || '').split('?')[0].split('#')[0];
         const pid = listingId(url);
         if (!pid || seen.has(pid)) continue;
@@ -87,9 +94,11 @@ for (const job of jobs || []) {
           if (res?.listing_is_new) { added++; newThisPage++; }
         } catch (e) { console.error('  ingest err', pid, String(e.message).slice(0, 100)); }
       }
-      console.log(`[${job.name}] str.${pg + 1}: ${data.length} ofert, +${newThisPage} nowych`);
-      if (cutoff) { if (!pageHasRecent) { console.log(`[${job.name}] osiągnięto wiek ${SINCE_DAYS} dni — stop`); break; } }        // backfill: stop na granicy okna
-      else if (newThisPage === 0) { if (++emptyStreak >= 2) { console.log(`[${job.name}] dogoniłem (2 str. bez nowych) — stop`); break; } } // steady: stop na nakładce
+      console.log(`[${job.name}] str.${pg + 1}: ${data.length} ofert, +${newThisPage} nowych${cutoffMs && maxOrgRefresh ? ` (dno refresh ${new Date(maxOrgRefresh).toISOString().slice(5, 16)})` : ''}`);
+      if (cutoffMs) {                                    // backfill: stop gdy najnowszy organiczny refresh < okno (monotonicznie → dalej tylko starsze)
+        if (maxOrgRefresh && maxOrgRefresh < cutoffMs) { if (++pastBoundary >= 2) { console.log(`[${job.name}] refresh < ${SINCE_DATE} — całe okno zebrane, stop`); break; } }
+        else pastBoundary = 0;
+      } else if (newThisPage === 0) { if (++emptyStreak >= 2) { console.log(`[${job.name}] dogoniłem (2 str. bez nowych) — stop`); break; } } // steady: stop na nakładce
       else emptyStreak = 0;
       await sleep(300 + Math.random() * 500);
     }
