@@ -1,0 +1,35 @@
+name: OLX collect (Faza 1)
+# Kolektor linków OLX — zbiera nowe organiczne oferty do leads (phone_id=null).
+# Nie loguje się, nie robi reveali → zero throttlingu. Często, bo "na bieżąco".
+on:
+  schedule:
+    - cron: "*/20 * * * *"   # co 20 min (przyrostowo — tanio)
+  workflow_dispatch: {}
+
+concurrency:
+  group: olx-collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install deps
+        working-directory: scraper/olx
+        run: npm install
+      - name: Install Chromium
+        working-directory: scraper/olx
+        run: npx patchright install --with-deps chromium
+      - name: Run collector
+        working-directory: scraper/olx
+        run: node collector.mjs
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MAX_PAGES: "8"
