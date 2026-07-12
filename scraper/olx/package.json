@@ -1,0 +1,14 @@
+{
+  "name": "olx-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Worker OLX (Node + patchright) — zbiera linki + reveal numerów przez friction, zapisuje przez leads_ingest_offer. Osobny od Otodom (Python), to samo repo.",
+  "scripts": {
+    "poc": "node reveal_poc.mjs"
+  },
+  "dependencies": {
+    "patchright": "latest",
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}

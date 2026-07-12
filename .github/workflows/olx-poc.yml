@@ -1,0 +1,32 @@
+name: OLX reveal PoC
+# Ręczny spike: sprawdza czy reveal numeru OLX działa przez patchright + IPRoyal PL,
+# i czy wymaga logowania. Uruchamiasz z GitHub → Actions → "OLX reveal PoC" → Run workflow,
+# wklejasz URL świeżej oferty (z listy prywatne/najnowsze). Wynik w logach ("DIAGNOZA").
+on:
+  workflow_dispatch:
+    inputs:
+      listing_url:
+        description: "Pełny URL aktywnej oferty OLX (prywatna, z listy najnowszych)"
+        required: true
+
+jobs:
+  poc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install deps
+        working-directory: scraper/olx
+        run: npm install
+      - name: Install Chromium (patchright)
+        working-directory: scraper/olx
+        run: npx patchright install --with-deps chromium
+      - name: Run reveal PoC
+        working-directory: scraper/olx
+        run: node reveal_poc.mjs
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          OLX_LISTING_URL: ${{ inputs.listing_url }}
