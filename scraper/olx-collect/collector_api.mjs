@@ -27,11 +27,12 @@ const CAT = {
 const listingId = (url) => { const m = url.match(/-ID([0-9A-Za-z]+)\.html/i); return m ? m[1] : null; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-let dispatcher;
-if (PROXY) {
-  const m = PROXY.match(/^https?:\/\/([^:]+):([^@]+)@([^:]+):(\d+)$/);
-  if (m) dispatcher = new ProxyAgent({ uri: `http://${m[3]}:${m[4]}`, token: 'Basic ' + Buffer.from(`${m[1]}:${m[2]}_session-${crypto.randomBytes(5).toString('hex')}_lifetime-10m`).toString('base64') });
+const pm = PROXY ? PROXY.match(/^https?:\/\/([^:]+):([^@]+)@([^:]+):(\d+)$/) : null;
+function makeDispatcher() {
+  if (!pm) return undefined;
+  return new ProxyAgent({ uri: `http://${pm[3]}:${pm[4]}`, token: 'Basic ' + Buffer.from(`${pm[1]}:${pm[2]}_session-${crypto.randomBytes(5).toString('hex')}_lifetime-10m`).toString('base64') });
 }
+let dispatcher = makeDispatcher();
 const apiH = { 'user-agent': UA, accept: 'application/json', 'accept-language': 'pl', origin: 'https://www.olx.pl', referer: 'https://www.olx.pl/' };
 
 async function rpc(fn, body) {
@@ -43,9 +44,14 @@ async function rpc(fn, body) {
 async function apiPage(cat, secondary, offset) {
   let u = `https://www.olx.pl/api/v1/offers/?offset=${offset}&limit=40&category_id=${cat}&sort_by=created_at%3Adesc`;
   if (secondary) u += '&filter_enum_market%5B0%5D=secondary';
-  const r = await fetch(u, { headers: apiH, dispatcher, signal: AbortSignal.timeout(25000) });
-  if (!r.ok) return null;                              // cap paginacji / błąd API → graceful stop scope
-  return (await r.json())?.data || [];
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const r = await fetch(u, { headers: apiH, dispatcher, signal: AbortSignal.timeout(25000) });
+      if (!r.ok) return null;                          // cap paginacji / HTTP błąd → koniec scope
+      return (await r.json())?.data || [];
+    } catch { dispatcher = makeDispatcher(); await sleep(800); } // proxy padł (terminated/fetch failed) → świeży agent + retry
+  }
+  return null;                                          // proxy nie wstał po 4 próbach → koniec scope (partial, bez crasha)
 }
 
 const jobs = await rpc('leads_get_active_jobs', { p_portal: 'olx' });
