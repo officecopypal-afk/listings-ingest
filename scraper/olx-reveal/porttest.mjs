@@ -1,4 +1,4 @@
-/** Czy port 32325 daje ŚWIEŻE IP (spoza naszej listy spalonych)? Bez OLX — tylko ipify + czarna lista. */
+/** Czy port 51250 daje ŚWIEŻE IP (spoza naszej listy spalonych)? Bez OLX — tylko ipify + czarna lista. */
 import { ProxyAgent } from 'undici';
 import crypto from 'crypto';
 const PROXY = process.env.IPROYAL_PROXY;
@@ -25,6 +25,6 @@ async function test(name, port, pwFn) {
   console.log(`${name.padEnd(30)} | ${ips.length}/${N} poł. | unik ${uniq.size} | ŚWIEŻYCH ${fresh.length} | świeżych-unik ${freshUniq.size} (${Math.round(100 * freshUniq.size / Math.max(1, ips.length))}%)`);
 }
 await test('port 12321 sticky (obecny)', 12321, () => `${BASE}_country-pl_session-${sid()}_lifetime-10m`);
-await test('port 32325 sticky', 32325, () => `${BASE}_country-pl_session-${sid()}_lifetime-10m`);
-await test('port 32325 bez session', 32325, () => `${BASE}_country-pl`);
-console.log('\n>>> jeśli 32325 ma znacząco więcej „świeżych-unik" niż 12321 → przełączam workera na 32325.');
+await test('port 51250 sticky', 51250, () => `${BASE}_country-pl_session-${sid()}_lifetime-10m`);
+await test('port 51250 bez session', 51250, () => `${BASE}_country-pl`);
+console.log('\n>>> jeśli 51250 ma znacząco więcej „świeżych-unik" niż 12321 → przełączam workera na 51250.');
