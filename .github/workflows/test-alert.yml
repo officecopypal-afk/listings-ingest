@@ -1,0 +1,17 @@
+name: test alert (ręczny)
+on: { workflow_dispatch: {} }
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - name: symuluj fail
+        run: echo "symuluję awarię bota" && exit 1
+      - name: Slack alert on failure
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SRK: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          payload=$(printf '{"text":":test_tube: *TEST alertu botów numerów*\\nJeśli to widzisz na Slacku — powiadomienia o failach działają. ✅\\n<%s|Log w GitHub Actions>"}' "$RUN_URL")
+          curl -sS -X POST "$SUPABASE_URL/functions/v1/scraper-alert" -H "authorization: Bearer $SRK" -H 'content-type: application/json' -d "$payload" -w "\nscraper-alert -> HTTP %{http_code}\n"

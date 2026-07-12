@@ -24,3 +24,13 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      - name: Slack alert on failure
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SRK: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WF: ${{ github.workflow }}
+        run: |
+          payload=$(printf '{"text":":red_circle: *Bot numerów — FAIL*\\n*%s* padł na cronie\\n<%s|Otwórz log w GitHub Actions>"}' "$WF" "$RUN_URL")
+          curl -sS -X POST "$SUPABASE_URL/functions/v1/scraper-alert" -H "authorization: Bearer $SRK" -H 'content-type: application/json' -d "$payload" || true

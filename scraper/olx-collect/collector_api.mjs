@@ -50,6 +50,7 @@ async function apiPage(cat, secondary, offset) {
 const jobs = await rpc('leads_get_active_jobs', { p_portal: 'olx' });
 console.log(`aktywne joby OLX: ${jobs?.length || 0}${PROXY ? ' | przez proxy' : ' | IP maszyny'}`);
 
+let jobOk = 0, jobErrors = 0;
 for (const job of jobs || []) {
   const cfg = CAT[`${job.property_type}|${job.transaction_type}`];
   if (!cfg) { console.warn(`[${job.name}] brak mapowania category_id — pomijam`); continue; }
@@ -80,10 +81,13 @@ for (const job of jobs || []) {
     }
     await rpc('leads_finalize_run', { p_run_id: runId, p_job_id: job.id, p_status: 'success', p_pages: pagesN, p_listings_found: found, p_listings_new: added, p_phones_new: 0, p_error: null });
     console.log(`[${job.name}] ✓ pages=${pagesN} found=${found} new=${added}`);
+    jobOk++;
   } catch (e) {
     console.error(`[${job.name}] ✗`, String(e.message).slice(0, 200));
+    jobErrors++;
     await rpc('leads_finalize_run', { p_run_id: runId, p_job_id: job.id, p_status: 'error', p_pages: pagesN, p_listings_found: found, p_listings_new: added, p_phones_new: 0, p_error: String(e.message).slice(0, 900) }).catch(() => {});
   }
 }
-console.log('kolektor-API: koniec');
-process.exit(0);
+console.log(`kolektor-API: koniec | ok=${jobOk} err=${jobErrors}`);
+// exit 1 tylko gdy NIC się nie zebrało a były błędy (pełna awaria) → alert Slack; pojedynczy transient nie alarmuje
+process.exit(jobOk === 0 && jobErrors > 0 ? 1 : 0);

@@ -97,4 +97,6 @@ for (let i = 0; i < (queue?.length || 0); i++) {
   await sleep(DELAY_MS + Math.random() * 1500);
 }
 console.log(`\n=== PODSUMOWANIE === IP użytych: ${ipCount} | ✅ ${stat.ok} | ⊘ ${stat.inactive} | ∅ ${stat.nophone} | ⏳ throttle ${stat.throttle} | ✗ ${stat.error}`);
-process.exit(0);
+// systemowa awaria (zmiana API OLX / proxy padło): 0 sukcesów i dużo TWARDYCH błędów → exit 1 → alert Slack.
+// Sam throttle (wypalony pool IP) to NIE awaria — nie alarmuje.
+process.exit(stat.ok === 0 && stat.error >= 15 ? 1 : 0);
