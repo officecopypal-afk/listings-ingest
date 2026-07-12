@@ -26,6 +26,7 @@ const CAT = {
   'mieszkanie|sprzedaz': { cat: 14, secondary: true },
   'mieszkanie|wynajem': { cat: 15, secondary: false },
   'dom|sprzedaz': { cat: 18, secondary: true },
+  'dom|wynajem': { cat: 20, secondary: false }, // mały wolumen (~1405 total); wynajem = bez filtra rynku
 };
 const listingId = (url) => { const m = url.match(/-ID([0-9A-Za-z]+)\.html/i); return m ? m[1] : null; };
 const isPromo = (o) => !!(o.promotion && o.promotion.top_ad); // wyróżnione/przypięte — pomijamy przy wyznaczaniu granicy sortu
