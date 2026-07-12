@@ -30,4 +30,6 @@ jobs:
         run: node reveal_poc.mjs
         env:
           IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          OLX_EMAIL: ${{ secrets.OLX_EMAIL }}
+          OLX_PASSWORD: ${{ secrets.OLX_PASSWORD }}
           OLX_LISTING_URL: ${{ inputs.listing_url }}
