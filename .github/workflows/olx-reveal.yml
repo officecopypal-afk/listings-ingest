@@ -32,6 +32,8 @@ jobs:
         with:
           node-version: "22"
       - run: npm install --no-audit --no-fund
+      - name: Install Chromium
+        run: npx patchright install --with-deps chromium
       - name: reveal
         env:
           IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
