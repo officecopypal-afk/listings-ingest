@@ -66,10 +66,33 @@ async function reveal(adId, dispatcher) {
   }
 }
 
+// PAMIĘĆ WYPALONYCH IP — nie wracamy na IP użyte ostatnio (przy puli ~1,5 mln PL świeże jest łatwe)
+const COOLDOWN_H = Number(process.env.IP_COOLDOWN_HOURS || 6);
+const FRESH_TRIES = Number(process.env.FRESH_IP_TRIES || 8);
+const burnedSet = new Set((await rpc('leads_ip_burned_recent', { p_cooldown_hours: COOLDOWN_H }).catch(() => [])) || []);
+const toBurn = new Set();
+console.log(`wypalonych IP w cooldownie (${COOLDOWN_H}h): ${burnedSet.size}`);
+
+async function ipOf(dispatcher) {
+  try { const r = await fetch('https://api.ipify.org?format=json', { dispatcher, signal: AbortSignal.timeout(8000) }); return (await r.json())?.ip || null; } catch { return null; }
+}
+// świeża sesja = exit-IP spoza wypalonych (sprawdzone przez ipify)
+async function freshAgent() {
+  for (let t = 0; t < FRESH_TRIES; t++) {
+    const agent = newAgent();
+    const ip = await ipOf(agent);
+    if (!ip || burnedSet.has(ip)) continue;   // brak IP lub użyte ostatnio → losuj następne
+    return { agent, ip };
+  }
+  const agent = newAgent();                     // fallback (pula chwilowo wąska)
+  return { agent, ip: await ipOf(agent) };
+}
+
 const queue = await rpc('leads_get_reveal_queue', { p_portal: 'olx', p_limit: MAX });
 console.log(`kolejka: ${queue?.length || 0} | CAP_PER_IP=${CAP_PER_IP} MAX_IP_TRIES=${MAX_IP_TRIES} delay=${DELAY_MS}ms\n`);
-let agent = newAgent(), onThisIp = 0, ipCount = 1;
+let cur = await freshAgent(), onThisIp = 0, ipCount = 1;
 const stat = { ok: 0, inactive: 0, nophone: 0, throttle: 0, error: 0, noid: 0 };
+const burnCurrent = () => { if (cur.ip) { toBurn.add(cur.ip); burnedSet.add(cur.ip); } };
 
 for (let i = 0; i < (queue?.length || 0); i++) {
   const row = queue[i];
@@ -77,10 +100,11 @@ for (let i = 0; i < (queue?.length || 0); i++) {
   if (!adId) { stat.noid++; continue; }
   let r, resolved = false;
   for (let tryIp = 0; tryIp < MAX_IP_TRIES && !resolved; tryIp++) {
-    if (onThisIp >= CAP_PER_IP) { agent = newAgent(); onThisIp = 0; ipCount++; }  // proaktywna rotacja pod limitem
-    r = await reveal(adId, agent);
+    if (onThisIp >= CAP_PER_IP) { cur = await freshAgent(); onThisIp = 0; ipCount++; }  // proaktywna rotacja pod limitem
+    r = await reveal(adId, cur.agent);
     onThisIp++;
-    if (r.status === 'throttle' || r.status === 'neterr') { agent = newAgent(); onThisIp = 0; ipCount++; await sleep(700); continue; } // spalone IP → świeże, ponów ad
+    if (r.status === 'throttle') { burnCurrent(); cur = await freshAgent(); onThisIp = 0; ipCount++; await sleep(400); continue; } // spalone IP → zapisz + świeże
+    if (r.status === 'neterr') { cur = await freshAgent(); onThisIp = 0; ipCount++; await sleep(400); continue; }                  // sieć (IP nie palimy)
     resolved = true;
   }
   if (r.status === 'ok') {
@@ -96,7 +120,8 @@ for (let i = 0; i < (queue?.length || 0); i++) {
   else { stat.error++; await rpc('leads_mark_reveal', { p_id: row.id, p_status: 'error' }).catch(() => {}); console.log(`  ${i + 1}/${queue.length} ✗ ${r.detail}`); }
   await sleep(DELAY_MS + Math.random() * 1500);
 }
-console.log(`\n=== PODSUMOWANIE === IP użytych: ${ipCount} | ✅ ${stat.ok} | ⊘ ${stat.inactive} | ∅ ${stat.nophone} | ⏳ throttle ${stat.throttle} | ✗ ${stat.error}`);
+if (toBurn.size) await rpc('leads_ip_burn', { p_ips: [...toBurn] }).catch(() => {});
+console.log(`\n=== PODSUMOWANIE === IP użytych: ${ipCount} | ✅ ${stat.ok} | ⊘ ${stat.inactive} | ∅ ${stat.nophone} | ⏳ throttle ${stat.throttle} | ✗ ${stat.error} | 🔥 wypalonych zapisano: ${toBurn.size}`);
 // systemowa awaria (zmiana API OLX / proxy padło): 0 sukcesów i dużo TWARDYCH błędów → exit 1 → alert Slack.
 // Sam throttle (wypalony pool IP) to NIE awaria — nie alarmuje.
 process.exit(stat.ok === 0 && stat.error >= 15 ? 1 : 0);
