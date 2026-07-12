@@ -9,11 +9,11 @@ on:
         description: "Ile ogłoszeń z kolejki"
         default: "60"
       cap_per_ip:
-        description: "Reveali na jedno IP (proaktywna rotacja pod limitem ~5)"
-        default: "4"
-      delay_ms:
-        description: "Odstęp między revealami (ms)"
-        default: "2500"
+        description: "Reveali na jedno IP (rotacja pod limitem ~5-6)"
+        default: "5"
+      concurrency:
+        description: "Ile workerów równolegle (każdy na swoim IP)"
+        default: "6"
   schedule:
     - cron: "*/10 * * * *"   # co 10 min — nocny przelot całej bazy; pamięć wypalonych IP omija spalone
 
@@ -40,10 +40,10 @@ jobs:
           OLX_FP: ${{ secrets.OLX_FP }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          MAX: ${{ github.event.inputs.max || '50' }}
-          CAP_PER_IP: ${{ github.event.inputs.cap_per_ip || '4' }}
+          MAX: ${{ github.event.inputs.max || '60' }}
+          CONCURRENCY: ${{ github.event.inputs.concurrency || '6' }}
+          CAP_PER_IP: ${{ github.event.inputs.cap_per_ip || '5' }}
           MAX_IP_TRIES: "4"
-          DELAY_MS: ${{ github.event.inputs.delay_ms || '2500' }}
         run: node revealer.mjs
       - name: Slack alert on failure
         if: failure()
