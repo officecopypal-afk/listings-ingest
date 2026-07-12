@@ -14,8 +14,10 @@ on:
       concurrency:
         description: "Ile workerów równolegle (każdy na swoim IP)"
         default: "6"
-  schedule:
-    - cron: "*/10 * * * *"   # co 10 min — nocny przelot całej bazy; pamięć wypalonych IP omija spalone
+  # cron WYŁĄCZONY (12.07 wieczór) — cały pool IPRoyal rozgrzany hurtem reveali; ostudzenie.
+  # Włączyć z powrotem GENTLE (rzadziej, mniejszy MAX) dopiero po potwierdzeniu że throttle opadł.
+  # schedule:
+  #   - cron: "*/10 * * * *"
 
 concurrency:
   group: olx-reveal
