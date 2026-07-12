@@ -9,11 +9,11 @@ on:
         description: "Ile ogłoszeń z kolejki"
         default: "60"
       cap_per_ip:
-        description: "Reveali na jedno IP (rotacja pod limitem ~5-6)"
-        default: "5"
+        description: "Reveali na jedno IP (model 1 IP = 1 numer, min. palenie)"
+        default: "1"
       concurrency:
         description: "Ile workerów równolegle (każdy na swoim IP)"
-        default: "6"
+        default: "5"
   # cron WYŁĄCZONY (12.07 wieczór) — cały pool IPRoyal rozgrzany hurtem reveali; ostudzenie.
   # Włączyć z powrotem GENTLE (rzadziej, mniejszy MAX) dopiero po potwierdzeniu że throttle opadł.
   # schedule:
