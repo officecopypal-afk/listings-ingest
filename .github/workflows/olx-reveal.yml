@@ -15,7 +15,7 @@ on:
         description: "Odstęp między revealami (ms)"
         default: "2500"
   schedule:
-    - cron: "*/12 * * * *"   # co 12 min — łagodnie, żeby nie palić IP szybciej niż się regenerują
+    - cron: "*/30 * * * *"   # co 30 min — start łagodny, żeby IP zdążyły ostygnąć; podkręcimy po pomiarze yieldu
 
 concurrency:
   group: olx-reveal
@@ -40,7 +40,8 @@ jobs:
           OLX_FP: ${{ secrets.OLX_FP }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          MAX: ${{ github.event.inputs.max || '60' }}
+          MAX: ${{ github.event.inputs.max || '40' }}
           CAP_PER_IP: ${{ github.event.inputs.cap_per_ip || '4' }}
+          MAX_IP_TRIES: "4"
           DELAY_MS: ${{ github.event.inputs.delay_ms || '2500' }}
         run: node revealer.mjs
