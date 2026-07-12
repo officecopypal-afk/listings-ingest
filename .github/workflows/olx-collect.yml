@@ -3,7 +3,7 @@ name: OLX collect (Faza 1)
 # Nie loguje się, nie robi reveali → zero throttlingu. Często, bo "na bieżąco".
 on:
   schedule:
-    - cron: "*/20 * * * *"   # co 20 min (przyrostowo — tanio)
+    - cron: "17 */3 * * *"   # co 3h — BACKSTOP (główny to olx-collect-api przez API JSON); łapie edge-case sortowania
   workflow_dispatch: {}
 
 concurrency:

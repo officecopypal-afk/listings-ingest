@@ -1,0 +1,37 @@
+name: OLX collect API (Faza 1)
+# Kolektor linków przez API JSON — bez przeglądarki, ~60× mniej transferu niż wersja browser.
+# Filtruje prywatne (business=false), kategorie 14/15/18. Główny kolektor.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # co 15 min — tanio (JSON), więc na bieżąco
+  workflow_dispatch:
+    inputs:
+      max_pages:
+        description: "Ile stron API na job (40 ofert/strona)"
+        default: "6"
+
+concurrency:
+  group: olx-collect-api
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: scraper/olx-collect
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - name: collect (API)
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MAX_PAGES: ${{ github.event.inputs.max_pages || '6' }}
+        run: node collector_api.mjs
