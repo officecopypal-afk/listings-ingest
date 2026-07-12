@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "patchright": "latest",
     "undici": "^6.21.0"
   }
 }

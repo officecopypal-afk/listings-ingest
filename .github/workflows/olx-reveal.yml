@@ -1,19 +1,21 @@
 name: OLX reveal (Faza 2)
+# Czysty fetch (bez przeglądarki). Throttle jest PER-IP (~5/IP) → rotacja proxy IP.
+# Numer → leads_ingest_offer → auto-SMS.
 
 on:
   workflow_dispatch:
     inputs:
       max:
         description: "Ile ogłoszeń z kolejki"
-        default: "12"
-      reveals_per_ip:
-        description: "Reveali na jedno proxy IP (1 = świeże IP każdy)"
-        default: "1"
+        default: "60"
+      cap_per_ip:
+        description: "Reveali na jedno IP (proaktywna rotacja pod limitem ~5)"
+        default: "4"
       delay_ms:
         description: "Odstęp między revealami (ms)"
-        default: "8000"
-  # schedule: włączymy po potwierdzeniu przepustowości
-  #   - cron: "*/15 * * * *"
+        default: "2500"
+  schedule:
+    - cron: "*/12 * * * *"   # co 12 min — łagodnie, żeby nie palić IP szybciej niż się regenerują
 
 concurrency:
   group: olx-reveal
@@ -22,7 +24,7 @@ concurrency:
 jobs:
   reveal:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: scraper/olx-reveal
@@ -32,15 +34,13 @@ jobs:
         with:
           node-version: "22"
       - run: npm install --no-audit --no-fund
-      - name: Install Chromium
-        run: npx patchright install --with-deps chromium
       - name: reveal
         env:
           IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
           OLX_FP: ${{ secrets.OLX_FP }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          MAX: ${{ github.event.inputs.max }}
-          REVEALS_PER_IP: ${{ github.event.inputs.reveals_per_ip }}
-          DELAY_MS: ${{ github.event.inputs.delay_ms }}
+          MAX: ${{ github.event.inputs.max || '60' }}
+          CAP_PER_IP: ${{ github.event.inputs.cap_per_ip || '4' }}
+          DELAY_MS: ${{ github.event.inputs.delay_ms || '2500' }}
         run: node revealer.mjs
