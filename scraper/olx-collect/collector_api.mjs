@@ -16,6 +16,7 @@ const PROXY = process.env.IPROYAL_PROXY;
 const SB_URL = (process.env.SUPABASE_URL || '').trim();
 const SB_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 const MAX_PAGES = Number(process.env.MAX_PAGES || 20); // sufit; realnie stop po 2 stronach bez nowych
+const SINCE_DAYS = Number(process.env.SINCE_DAYS || 0); // >0 (backfill): stop gdy ogłoszenia starsze niż N dni
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
 
 const CAT = {
@@ -43,7 +44,7 @@ async function apiPage(cat, secondary, offset) {
   let u = `https://www.olx.pl/api/v1/offers/?offset=${offset}&limit=40&category_id=${cat}&sort_by=created_at%3Adesc`;
   if (secondary) u += '&filter_enum_market%5B0%5D=secondary';
   const r = await fetch(u, { headers: apiH, dispatcher, signal: AbortSignal.timeout(25000) });
-  if (!r.ok) throw new Error('API ' + r.status);
+  if (!r.ok) return null;                              // cap paginacji / błąd API → graceful stop scope
   return (await r.json())?.data || [];
 }
 
@@ -61,12 +62,14 @@ for (const job of jobs || []) {
     // skanuj aż 2 strony Z RZĘDU bez NOWYCH = dogoniliśmy poprzedni zbiór (nakładka → zero luki).
     // sufit MAX_PAGES chroni przed runaway; przy skoku schodzi głębiej, normalnie stop po 2-3 str.
     let emptyStreak = 0;
+    const cutoff = SINCE_DAYS ? Date.now() - SINCE_DAYS * 86400000 : 0;
     for (let pg = 0; pg < MAX_PAGES; pg++) {
       const data = await apiPage(cfg.cat, cfg.secondary, pg * 40);
-      if (!data.length) break;
+      if (!data || !data.length) { console.log(`[${job.name}] koniec wyników API (str.${pg + 1})`); break; }
       pagesN++;
-      let newThisPage = 0;
+      let newThisPage = 0, pageHasRecent = !cutoff;
       for (const o of data) {
+        if (cutoff && o.created_time && new Date(o.created_time).getTime() >= cutoff) pageHasRecent = true;
         if (o.business !== false) continue;              // tylko prywatne
         const url = (o.url || '').split('?')[0].split('#')[0];
         const pid = listingId(url);
@@ -79,7 +82,9 @@ for (const job of jobs || []) {
         } catch (e) { console.error('  ingest err', pid, String(e.message).slice(0, 100)); }
       }
       console.log(`[${job.name}] str.${pg + 1}: ${data.length} ofert, +${newThisPage} nowych`);
-      if (newThisPage === 0) { if (++emptyStreak >= 2) { console.log(`[${job.name}] dogoniłem (2 str. bez nowych) — stop`); break; } } else emptyStreak = 0;
+      if (cutoff) { if (!pageHasRecent) { console.log(`[${job.name}] osiągnięto wiek ${SINCE_DAYS} dni — stop`); break; } }        // backfill: stop na granicy okna
+      else if (newThisPage === 0) { if (++emptyStreak >= 2) { console.log(`[${job.name}] dogoniłem (2 str. bez nowych) — stop`); break; } } // steady: stop na nakładce
+      else emptyStreak = 0;
       await sleep(300 + Math.random() * 500);
     }
     await rpc('leads_finalize_run', { p_run_id: runId, p_job_id: job.id, p_status: 'success', p_pages: pagesN, p_listings_found: found, p_listings_new: added, p_phones_new: 0, p_error: null });

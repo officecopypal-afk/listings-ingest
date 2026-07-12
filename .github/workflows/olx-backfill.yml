@@ -1,0 +1,38 @@
+name: OLX backfill (jednorazowy, głęboki)
+# Jednorazowy głęboki scan wstecz (okno wiekowe) — dobiera zaległość, sprawdza luki.
+# Nie zdechnie: timeout 120 min + każde ogłoszenie zapisywane od razu (nic nie tracimy jak uciął).
+on:
+  workflow_dispatch:
+    inputs:
+      since_days:
+        description: "Ile dni wstecz (okno)"
+        default: "11"
+      max_pages:
+        description: "Sufit stron/zakres (stop na granicy okna albo cap OLX)"
+        default: "200"
+
+concurrency:
+  group: olx-collect-api          # ten sam co kolektor → nie biją się
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: scraper/olx-collect
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - name: backfill
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SINCE_DAYS: ${{ github.event.inputs.since_days || '11' }}
+          MAX_PAGES: ${{ github.event.inputs.max_pages || '200' }}
+        run: node collector_api.mjs
