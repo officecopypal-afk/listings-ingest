@@ -1,0 +1,17 @@
+name: fp probe (czy fingerprint)
+on: { workflow_dispatch: {} }
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    defaults: { run: { working-directory: scraper/fp-probe } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: npm install --no-audit --no-fund
+      - run: npx patchright install --with-deps chromium
+      - env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          OLX_FP: ${{ secrets.OLX_FP }}
+        run: node probe.mjs
