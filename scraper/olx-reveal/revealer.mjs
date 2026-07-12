@@ -38,8 +38,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const pm = PROXY.match(/^https?:\/\/([^:]+):([^@]+)@([^:]+):(\d+)$/);
 if (!pm) throw new Error('IPROYAL_PROXY format: http://user:pass@host:port');
 const [, PU, PP, PH, PT] = pm;
-// lifetime-1m: freshtest 12.07 pokazał 3,5× więcej świeżych IP (spoza spalonych) niż 10m
-const newAgent = () => new ProxyAgent({ uri: `http://${PH}:${PT}`, token: 'Basic ' + Buffer.from(`${PU}:${PP}_session-${crypto.randomBytes(6).toString('hex')}_lifetime-1m`).toString('base64') });
+const newAgent = () => new ProxyAgent({ uri: `http://${PH}:${PT}`, token: 'Basic ' + Buffer.from(`${PU}:${PP}_session-${crypto.randomBytes(6).toString('hex')}_lifetime-10m`).toString('base64') });
 
 async function rpc(fn, body) {
   const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
