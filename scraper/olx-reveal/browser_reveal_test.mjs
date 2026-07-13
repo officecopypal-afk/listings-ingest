@@ -1,4 +1,4 @@
-/** Walidacja: czy PRZEGLĄDARKA odsłoni numer mimo "blank"? Podsłuch friction+limited-phones + klik. */
+/** Gruntowna diagnostyka: czemu klik "Pokaż" nie odpala reveala. Konsola + HTML + wszystkie requesty + URL. */
 import { chromium } from 'patchright';
 import crypto from 'crypto';
 const PROXY = process.env.IPROYAL_PROXY;
@@ -13,46 +13,49 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const lr = await fetch('https://www.olx.pl/api/v1/offers/?offset=0&limit=25&category_id=14&sort_by=created_at%3Adesc', { headers: { 'user-agent': UA, accept: 'application/json', origin: 'https://www.olx.pl', referer: 'https://www.olx.pl/' } });
 const off = ((await lr.json())?.data || []).find(o => o.business === false && o.contact?.phone === true);
 const url = off.url.split('?')[0];
-console.log('oferta:', url.slice(-40), '| kraj:', COUNTRY);
+console.log('oferta:', url.slice(-40));
 
 const browser = await chromium.launch({ headless: true, proxy: proxyCfg(), args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'] });
 try {
   const ctx = await browser.newContext({ locale: 'pl-PL', timezoneId: 'Europe/Warsaw', viewport: { width: 1366, height: 900 }, userAgent: UA });
   const page = await ctx.newPage();
+  const reqAfterClick = []; let clickedAt = 0;
+  page.on('request', (r) => { if (clickedAt && Date.now() - clickedAt < 12000) { const u = r.url(); if (/friction|limited-phones|api\/v1|login|auth|captcha|datadome|challenge/i.test(u)) reqAfterClick.push(r.method() + ' ' + u.replace(/https?:\/\//, '').split('?')[0].slice(0, 50)); } });
+  page.on('console', (m) => { if (m.type() === 'error') console.log('  [console.error]', m.text().slice(0, 90)); });
   await page.route('**/*', (r) => (['image', 'media', 'font'].includes(r.request().resourceType()) ? r.abort() : r.continue()));
 
-  let phoneResult = null;
-  page.on('response', async (resp) => {
-    const u = resp.url();
-    if (/friction\.olxgroup|limited-phones/i.test(u)) {
-      let body = ''; try { body = await resp.text(); } catch {}
-      console.log(`  >>> ${u.replace(/https?:\/\//, '').split('?')[0].slice(0, 42)} HTTP ${resp.status()} → ${body.slice(0, 110)}`);
-      if (/limited-phones/i.test(u)) phoneResult = { status: resp.status(), body: body.slice(0, 200) };
-    }
-  });
-
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-  await sleep(2500);
-  for (const sel of ['#onetrust-accept-btn-handler', 'button[id*="accept"]', 'button:has-text("Akceptuję")']) {
-    try { const b = page.locator(sel).first(); if (await b.isVisible({ timeout: 1000 })) { await b.click({ timeout: 2000 }); console.log('  cookies ok'); break; } } catch {}
-  }
-  await sleep(2000);
-
-  // klik "Pokaż" w kontenerze telefonu (a jak nie, dowolny show-phone)
-  let clicked = false;
-  for (const sel of ['[data-testid="phones-container"] [data-testid="show-phone"]', '[data-testid="show-phone"]']) {
-    const loc = page.locator(sel); const cnt = await loc.count();
-    for (let i = 0; i < cnt && !clicked; i++) {
-      try { const b = loc.nth(i); await b.scrollIntoViewIfNeeded({ timeout: 2000 }); if (await b.isVisible()) { await b.hover().catch(() => {}); await sleep(300); await b.click({ timeout: 3000 }); console.log(`  KLIKNIĘTO ${sel} #${i}`); clicked = true; } } catch (e) { console.log('  klik err:', e.message.slice(0, 45)); }
+  await sleep(3000);
+  // zgoda — czekaj i próbuj (też w iframe)
+  let consent = false;
+  for (let t = 0; t < 6 && !consent; t++) {
+    for (const sel of ['#onetrust-accept-btn-handler', 'button:has-text("Akceptuję")', 'button:has-text("Zaakceptuj wszystko")', '[data-testid="cookies-accept"]']) {
+      try { const b = page.locator(sel).first(); if (await b.isVisible({ timeout: 500 })) { await b.click({ timeout: 2000 }); consent = true; console.log('  ZGODA:', sel); break; } } catch {}
     }
-    if (clicked) break;
+    if (!consent) await sleep(1000);
   }
-  if (!clicked) console.log('  ⚠️ nie kliknąłem');
+  console.log('  zgoda przyjęta?', consent);
+  await sleep(2500);
 
-  await sleep(10000); // czas na challenge + request
+  // stan PRZED klikiem
+  console.log('  URL przed:', page.url().slice(0, 50));
+  const htmlBefore = await page.locator('[data-testid="phones-container"]').first().evaluate(e => e.outerHTML).catch(() => '(brak kontenera)');
+  console.log('  HTML kontenera PRZED:', htmlBefore.replace(/\s+/g, ' ').slice(0, 200));
 
-  const containerTxt = await page.locator('[data-testid="phones-container"]').first().innerText().catch(() => '');
-  console.log('\n=== WYNIK ===');
-  console.log('  limited-phones:', phoneResult ? `HTTP ${phoneResult.status} ${phoneResult.body}` : 'BRAK requestu');
-  console.log('  phones-container:', containerTxt.replace(/\s+/g, ' ').slice(0, 60) || 'pusto');
+  // klik
+  clickedAt = Date.now();
+  let clicked = false;
+  const loc = page.locator('[data-testid="show-phone"]'); const cnt = await loc.count();
+  for (let i = 0; i < cnt && !clicked; i++) {
+    try { const b = loc.nth(i); await b.scrollIntoViewIfNeeded({ timeout: 2000 }); if (await b.isVisible()) { await b.click({ timeout: 3000 }); console.log('  KLIK #' + i); clicked = true; } } catch (e) { console.log('  klik#' + i + ' err:', e.message.slice(0, 40)); }
+  }
+  // fallback: klik przez JS
+  if (clicked) { try { await loc.first().evaluate(e => e.click()).catch(() => {}); } catch {} }
+
+  await sleep(11000);
+  console.log('\n=== PO KLIKU ===');
+  console.log('  requesty po kliku:', reqAfterClick.length ? reqAfterClick.join(' | ') : 'ŻADNYCH');
+  console.log('  URL po:', page.url().slice(0, 50));
+  const htmlAfter = await page.locator('[data-testid="phones-container"]').first().evaluate(e => e.outerHTML).catch(() => '(brak)');
+  console.log('  HTML kontenera PO:', htmlAfter.replace(/\s+/g, ' ').slice(0, 200));
 } catch (e) { console.log('BŁĄD:', e.message.slice(0, 150)); } finally { await browser.close(); }
