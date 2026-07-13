@@ -52,7 +52,9 @@ function recordOutcome(status) {
   winAtt++;
   if (status === 'throttle' || status === 'delay' || status === 'neterr') winThr++;
   if (winAtt >= 40) {
-    if (winThr / winAtt > 0.75) { const old = curCountry(); cIdx = (cIdx + 1) % COUNTRIES.length; console.log(`🔀 ${old.toUpperCase()} nasycony (${Math.round(100 * winThr / winAtt)}% throttle) → przełączam na ${curCountry().toUpperCase()}`); }
+    const pct = Math.round(100 * winThr / winAtt);
+    if (winThr / winAtt > 0.75) { const old = curCountry(); cIdx = (cIdx + 1) % COUNTRIES.length; console.log(`🔀 ${old.toUpperCase()} nasycony (${pct}% throttle) → przełączam na ${curCountry().toUpperCase()}`); }
+    else console.log(`   [${curCountry().toUpperCase()}] okno 40: ${pct}% throttle — zostaję`);
     winAtt = 0; winThr = 0;
   }
 }

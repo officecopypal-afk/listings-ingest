@@ -17,6 +17,9 @@ on:
       proxy_country:
         description: "Kraj proxy (pl/de/fr/...) — świeża pula IP"
         default: "pl"
+      proxy_countries:
+        description: "Lista krajów do rotacji, np pl,ua,ro,de,gb (pusta = pojedynczy)"
+        default: ""
   # cron WYŁĄCZONY (12.07 wieczór) — cały pool IPRoyal rozgrzany hurtem reveali; ostudzenie.
   # Włączyć z powrotem GENTLE (rzadziej, mniejszy MAX) dopiero po potwierdzeniu że throttle opadł.
   # schedule:
@@ -50,6 +53,7 @@ jobs:
           CAP_PER_IP: ${{ github.event.inputs.cap_per_ip || '6' }}
           MAX_IP_TRIES: "4"
           PROXY_COUNTRY: ${{ github.event.inputs.proxy_country || 'pl' }}
+          PROXY_COUNTRIES: ${{ github.event.inputs.proxy_countries || '' }}
         run: node revealer.mjs
       - name: Slack alert on failure
         if: failure()
