@@ -23,30 +23,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const suffix = (u) => { const m = u.match(/-ID([0-9A-Za-z]+)\.html/i); return m ? m[1] : null; };
 const normPhone = (s) => { const d = String(s).replace(/\D/g, ''); if (d.length === 9) return '+48' + d; if (d.length === 11 && d.startsWith('48')) return '+' + d; return d.length >= 9 ? '+48' + d.slice(-9) : null; };
 const pm = PROXY.match(/^https?:\/\/([^:]+):([^@]+)@([^:]+):(\d+)$/);
-const LIFETIME = process.env.PROXY_LIFETIME || '12h';           // 1 konto = 1 STAŁY IP na 12h (IPRoyal max 7d)
+const LIFETIME = process.env.PROXY_LIFETIME || '24h';           // 1 konto = 1 STAŁY IP na 24h (IPRoyal max 7d)
 const keyFor = (acc, salt) => crypto.createHash('md5').update(salt ? `${acc}:${salt}` : acc).digest('hex').slice(0, 8); // session ID = dokładnie 8 znaków (spec IPRoyal); deterministyczny per konto → inny IP na każdy mail
 const passFor = (key) => `${pm[2]}_country-pl_session-${key}_lifetime-${LIFETIME}`;
 const proxyForKey = (key) => ({ server: `http://${pm[3]}:${pm[4]}`, username: pm[1], password: passFor(key) });
 const ipVia = async (key) => { try { const a = new ProxyAgent(`http://${pm[1]}:${passFor(key)}@${pm[3]}:${pm[4]}`); const r = await fetch('https://api.ipify.org?format=json', { dispatcher: a, signal: AbortSignal.timeout(15000) }); return (await r.json()).ip; } catch { return null; } };
-const chosenKey = {};                                           // acc → zablokowany klucz sesji = ten sam IP przez cały run
 
 async function rpc(fn, body) { const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }); const t = await r.text(); if (!r.ok) throw new Error(`${fn} ${r.status}`); return t ? JSON.parse(t) : null; }
 async function slack(text) { try { await fetch(`${SB_URL}/functions/v1/scraper-alert`, { method: 'POST', headers: { authorization: `Bearer ${SB_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ text }) }); } catch {} }
 
-// Dobierz kontu ŚWIEŻE IP (spoza spalonych/wystudzonych z ostatnich 12h) i zablokuj na cały run (= ten sam IP 12h).
-async function freshKeyFor(acc) {
-  if (chosenKey[acc]) return chosenKey[acc];
-  let burned = new Set();
-  try { burned = new Set(await rpc('leads_ip_burned_recent', { p_cooldown_hours: 12 })); } catch {}
-  let nulls = 0;
-  for (let salt = 0; salt < 8; salt++) {
-    const key = keyFor(acc, salt);
-    const ip = await ipVia(key);
-    if (!ip) { if (++nulls >= 2) { console.log(`  [${acc}] ⚠️ proxy nie zwraca IP — sprawdź IPROYAL_PROXY`); break; } continue; }
-    if (!burned.has(ip)) { console.log(`  [${acc}] 🌐 IP ${ip} świeży${salt ? ` (salt=${salt})` : ''} — trzymam ${LIFETIME}`); chosenKey[acc] = key; return key; }
-    console.log(`  [${acc}] IP ${ip} spalony/wystudzany (<12h) — biorę inny...`);
-  }
-  const key = keyFor(acc, 0); chosenKey[acc] = key; return key;
+// 1 KONTO = 1 STAŁY IP (deterministyczny md5 z nazwy konta). ZERO re-rollingu — ten sam IP co zawsze. Log tylko dla pewności.
+async function proxyKeyFor(acc) {
+  const key = keyFor(acc);
+  const ip = await ipVia(key).catch(() => null);
+  console.log(`  [${acc}] 🌐 stały IP: ${ip || '(nie sprawdzono)'} — ten sam co zawsze, trzymam ${LIFETIME}`);
+  return key;
 }
 
 async function revealBatch(browser, acc, state) {
@@ -54,7 +45,7 @@ async function revealBatch(browser, acc, state) {
   const queue = await rpc('leads_get_reveal_queue', { p_portal: 'olx', p_limit: PER_ACCOUNT }).catch(() => []);
   res.fetched = queue?.length || 0;
   if (!res.fetched) return res;
-  const key = await freshKeyFor(acc);
+  const key = await proxyKeyFor(acc);
   const ctx = await browser.newContext({ proxy: proxyForKey(key), storageState: state, locale: 'pl-PL', timezoneId: 'Europe/Warsaw', viewport: { width: 1366, height: 900 }, userAgent: UA });
   const page = await ctx.newPage();
   await page.route('**/*', (r) => (['image', 'media', 'font'].includes(r.request().resourceType()) ? r.abort() : r.continue()));
