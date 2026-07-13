@@ -9,7 +9,7 @@ import { ProxyAgent } from 'undici';
 let accounts = {};
 if (process.env.OLX_SESSIONS) accounts = JSON.parse(process.env.OLX_SESSIONS);
 else if (process.env.OLX_SESSION) accounts = { konto1: JSON.parse(process.env.OLX_SESSION) };
-const names = Object.keys(accounts);
+let names = Object.keys(accounts); // jeśli puste — dociągniemy z DB niżej (po zdefiniowaniu rpc)
 
 const PROXY = process.env.IPROYAL_PROXY;
 const SB_URL = (process.env.SUPABASE_URL || '').trim();
@@ -64,6 +64,7 @@ async function revealBatch(browser, acc, state) {
   await sleep(7000);
   const loggedIn = await page.locator('[data-testid="my-account-menu"], [data-testid="header-user-menu"], a[href*="/mojolx"], a[href*="/konto"]').first().isVisible({ timeout: 2500 }).catch(() => false);
   console.log(`  [${acc}] rozgrzewka: zalogowany=${loggedIn}`);
+  if (loggedIn) { try { await rpc('leads_upsert_olx_session', { p_name: acc, p_state: await ctx.storageState() }); } catch {} } // zapisz odświeżone tokeny do DB
   for (const row of queue) {
     let phone = null, lpStatus = null, lpBody = '', blank = false, clicked = false;
     const onResp = async (resp) => {
@@ -94,6 +95,9 @@ async function revealBatch(browser, acc, state) {
   return res;
 }
 
+// Sesje z DB (leads.olx_sessions), gdy nie podano w env — DB = źródło prawdy (za duże na sekret GH: 64KB)
+if (!names.length) { accounts = await rpc('leads_get_olx_sessions').catch(() => ({})); names = Object.keys(accounts || {}); console.log(`sesje z DB: ${names.length}`); }
+if (process.env.ONLY_ACCOUNTS) { const only = new Set(process.env.ONLY_ACCOUNTS.split(',').map((s) => s.trim())); names = names.filter((n) => only.has(n)); }
 console.log(`konta: ${names.join(', ') || 'BRAK'} | PER_ACCOUNT=${PER_ACCOUNT} | cooldown=${COOLDOWN_MS / 60000}min | budżet=${Math.round(BUDGET_MS / 60000)}min`);
 if (!names.length) { console.log('brak sesji (OLX_SESSION/OLX_SESSIONS)'); process.exit(1); }
 const browser = await chromium.launch({ headless: false, args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'] }); // headful (przez xvfb) — headless wykrywany przez OLX

@@ -12,6 +12,9 @@ on:
       cooldown_min:
         description: "Cooldown per konto (min)"
         default: "8"
+      only_accounts:
+        description: "Test na wybranych kontach, np. konto1,konto2,konto3 (puste = wszystkie z DB)"
+        default: ""
 jobs:
   reveal:
     runs-on: ubuntu-latest
@@ -29,13 +32,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: browser reveal (headful przez xvfb)
         env:
-          OLX_SESSION: ${{ secrets.OLX_SESSION }}
-          OLX_SESSIONS: ${{ secrets.OLX_SESSIONS }}
           IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PER_ACCOUNT: ${{ github.event.inputs.per_account || '5' }}
           COOLDOWN_MIN: ${{ github.event.inputs.cooldown_min || '8' }}
           BUDGET_MIN: ${{ github.event.inputs.budget_min || '300' }}
+          ONLY_ACCOUNTS: ${{ github.event.inputs.only_accounts || '' }}
           DEBUG: "1"
         run: xvfb-run -a node browser_revealer.mjs
