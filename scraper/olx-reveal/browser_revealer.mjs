@@ -66,7 +66,7 @@ async function revealBatch(browser, acc, state) {
   console.log(`  [${acc}] rozgrzewka: zalogowany=${loggedIn}`);
   if (loggedIn) { try { await rpc('leads_upsert_olx_session', { p_name: acc, p_state: await ctx.storageState() }); } catch {} } // zapisz odświeżone tokeny do DB
   for (const row of queue) {
-    let phone = null, lpStatus = null, lpBody = '', blank = false, clicked = false;
+    let phone = null, lpStatus = null, lpBody = '', blank = false, clicked = false, noBtn = false;
     const onResp = async (resp) => {
       const u = resp.url();
       if (/friction\.olxgroup/i.test(u)) { try { const j = await resp.json(); if (j?.challenge?.type) blank = true; } catch {} }
@@ -75,17 +75,24 @@ async function revealBatch(browser, acc, state) {
     page.on('response', onResp);
     try {
       await page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: 40000 });
-      await sleep(5000);
       if (/login\.olx\.pl/i.test(page.url())) res.expired = true;
       else {
-        const btns = page.locator('[data-testid="show-phone"]'); const n = await btns.count();
-        for (let i = 0; i < n; i++) { const b = btns.nth(i); if (await b.isVisible().catch(() => false)) { await b.scrollIntoViewIfNeeded().catch(() => {}); await b.click({ timeout: 3000 }).catch(() => {}); clicked = true; break; } }
-        await sleep(4500);
-        if (/login\.olx\.pl/i.test(page.url())) res.expired = true;
+        // czekaj aż przycisk "Pokaż numer" REALNIE się pojawi (do 10s); brak = ogłoszenie bez numeru
+        const appeared = await page.locator('[data-testid="show-phone"]').first().waitFor({ state: 'visible', timeout: 10000 }).then(() => true).catch(() => false);
+        if (!appeared) noBtn = true;
+        // klik + RETRY aż numer wejdzie — pierwszy klik bywa jałowy (friction SDK się dogrzewa; dowód: konto1 ∅→✅ w 2. turze)
+        for (let attempt = 0; attempt < 3 && !phone && !res.expired && !noBtn; attempt++) {
+          const b = page.locator('[data-testid="show-phone"]').first();
+          if (!(await b.isVisible().catch(() => false))) break;                 // zniknął = odsłonięty albo brak
+          await b.scrollIntoViewIfNeeded().catch(() => {});
+          await b.click({ timeout: 3000 }).catch(() => {});
+          clicked = true;
+          for (let w = 0; w < 13 && !phone; w++) { await sleep(600); if (/login\.olx\.pl/i.test(page.url())) { res.expired = true; break; } } // poll ~8s na odpowiedź
+        }
       }
     } catch {}
     page.off('response', onResp);
-    if (DEBUG) { const cont = await page.locator('[data-testid="phones-container"]').first().innerText().catch(() => ''); console.log(`  [dbg] ...${row.url.slice(-28)} klik:${clicked} login:${/login\.olx/i.test(page.url())} blank:${blank} lp:${lpStatus || '—'} cont:"${cont.replace(/\s+/g, ' ').slice(0, 22)}" ${lpBody ? lpBody.slice(0, 45) : ''}`); }
+    if (DEBUG) { const cont = await page.locator('[data-testid="phones-container"]').first().innerText().catch(() => ''); console.log(`  [dbg] ...${row.url.slice(-28)} klik:${clicked} nobtn:${noBtn} login:${/login\.olx/i.test(page.url())} blank:${blank} lp:${lpStatus || '—'} cont:"${cont.replace(/\s+/g, ' ').slice(0, 22)}" ${lpBody ? lpBody.slice(0, 45) : ''}`); }
     if (res.expired) break;
     if (phone) { const norm = normPhone(phone); try { const r = await rpc('leads_ingest_offer', { p_offer: { url: row.url, portal: 'olx', portal_listing_id: suffix(row.url), property_type: row.property_type, transaction_type: row.transaction_type, phone: norm, raw: { source: 'olx-browser' } } }); console.log(`  [${acc}] ✅ ${phone} (sms:${r?.sms_status || '?'})`); res.ok++; } catch {} }
     else { res.nophone++; await rpc('leads_defer_reveal', { p_id: row.id, p_minutes: 30 }).catch(() => {}); }
