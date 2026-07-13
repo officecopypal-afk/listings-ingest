@@ -7,10 +7,10 @@ on:
     inputs:
       max:
         description: "Batch (ofert na obieg)"
-        default: "200"
+        default: "600"
       concurrency:
-        description: "Ile workerów równolegle"
-        default: "20"
+        description: "Ile workerów równolegle (sweet spot ~30; >30 pali IP bez zysku)"
+        default: "30"
 
 concurrency:
   group: olx-reveal
@@ -37,11 +37,12 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           LOOP_UNTIL_EMPTY: "1"
           RUN_BUDGET_MS: "20400000"
-          MAX: ${{ github.event.inputs.max || '200' }}
-          CONCURRENCY: ${{ github.event.inputs.concurrency || '10' }}
-          CAP_PER_IP: "1"
+          MAX: ${{ github.event.inputs.max || '600' }}
+          CONCURRENCY: ${{ github.event.inputs.concurrency || '30' }}
+          CAP_PER_IP: "6"
           MAX_IP_TRIES: "4"
-          DEFER_MIN: "25"
+          DEFER_MIN: "10"
+          PROXY_COUNTRY: "pl"
         run: node revealer.mjs
       - name: Slack alert on failure
         if: failure()
