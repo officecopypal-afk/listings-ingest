@@ -1,10 +1,11 @@
-/** LOKALNY helper: otwiera Chrome z TRWAŁYM profilem konta, czeka aż się zalogujesz (auto-wykrycie),
- *  zapisuje sesję. Hasło wpisujesz/zapisujesz w Chrome (menedżer haseł), nie w kodzie.
- *  Użycie: node login_helper.mjs konto1   (albo odpalany z panelu na 8899) */
+/** LOKALNY helper: otwiera Chrome z IZOLOWANYM trwałym profilem konta (NIE czyta Twojej przeglądarki),
+ *  klika "Zaloguj się" (pokazuje formularz — Ty wpisujesz dane), czeka aż się zalogujesz, zapisuje sesję.
+ *  Użycie: node login_helper.mjs konto1   (albo z panelu 8899) */
 import { chromium } from 'patchright';
 import fs from 'fs';
 const ACC = process.argv[2] || 'konto1';
 const LOGGED = '[data-testid="my-account-menu"], [data-testid="header-user-menu"], a[href*="/mojolx"], a[href*="/konto"], [data-testid="user-menu"]';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const ctx = await chromium.launchPersistentContext(`./profiles/${ACC}`, {
   headless: false, viewport: { width: 1400, height: 900 }, locale: 'pl-PL', timezoneId: 'Europe/Warsaw',
@@ -12,17 +13,28 @@ const ctx = await chromium.launchPersistentContext(`./profiles/${ACC}`, {
 });
 const page = ctx.pages()[0] || await ctx.newPage();
 await page.goto('https://www.olx.pl/', { waitUntil: 'domcontentloaded' }).catch(() => {});
+await sleep(2000);
 
-// jak profil już zalogowany — od razu zapisz i zamknij
-let logged = await page.locator(LOGGED).first().isVisible({ timeout: 2500 }).catch(() => false);
+let logged = await page.locator(LOGGED).first().isVisible({ timeout: 2000 }).catch(() => false);
 if (!logged) {
-  console.log(`\n[${ACC}] Zaloguj się w oknie (Chrome podpowie/zapisze hasło). Czekam max 4 min...`);
-  for (let t = 0; t < 120 && !logged; t++) { await new Promise((r) => setTimeout(r, 2000)); logged = await page.locator(LOGGED).first().isVisible({ timeout: 500 }).catch(() => false); }
+  // zgoda cookies
+  for (const s of ['#onetrust-accept-btn-handler', 'button:has-text("Akceptuję")', 'button:has-text("Zaakceptuj")']) {
+    try { const b = page.locator(s).first(); if (await b.isVisible({ timeout: 800 })) { await b.click({ timeout: 1500 }); break; } } catch {}
+  }
+  await sleep(800);
+  // otwórz FORMULARZ logowania (sam klik "Zaloguj się" — bez wpisywania danych, to robisz Ty)
+  let opened = false;
+  for (const s of ['[data-testid="header-login-button"]', 'a[data-testid="login-tab"]', 'a:has-text("Zaloguj się")', 'button:has-text("Zaloguj się")', 'a[href*="login.olx"]']) {
+    try { const b = page.locator(s).first(); if (await b.isVisible({ timeout: 1500 })) { await b.click({ timeout: 2500 }); opened = true; break; } } catch {}
+  }
+  console.log(`\n[${ACC}] 👉 ${opened ? 'Formularz logowania otwarty.' : 'Kliknij "Zaloguj się" w oknie.'} Wpisz dane konta ${ACC} (login + hasło) i zaloguj się.`);
+  console.log(`[${ACC}] Czekam aż wykryję zalogowanie (max 4 min)...`);
+  for (let t = 0; t < 120 && !logged; t++) { await sleep(2000); logged = await page.locator(LOGGED).first().isVisible({ timeout: 500 }).catch(() => false); }
 }
 if (!logged) { console.log(`[${ACC}] nie wykryłem zalogowania — zamykam (spróbuj ponownie)`); await ctx.close(); process.exit(1); }
 
 const state = await ctx.storageState();
 fs.writeFileSync(`session_${ACC}.json`, JSON.stringify(state));
-console.log(`✅ [${ACC}] ZALOGOWANY — sesja zapisana (session_${ACC}.json, ${state.cookies.length} cookies). Profil trwały: profiles/${ACC}`);
+console.log(`✅ [${ACC}] ZALOGOWANY — sesja zapisana (session_${ACC}.json, ${state.cookies.length} cookies).`);
 await ctx.close();
 process.exit(0);
