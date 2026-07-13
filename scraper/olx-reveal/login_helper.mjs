@@ -4,8 +4,9 @@
 import { chromium } from 'patchright';
 import fs from 'fs';
 const ACC = process.argv[2] || 'konto1';
-const LOGGED = '[data-testid="my-account-menu"], [data-testid="header-user-menu"], a[href*="/mojolx"], a[href*="/konto"], [data-testid="user-menu"]';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// PEWNE wykrycie zalogowania: token użytkownika Auth0 w localStorage (jest tylko po realnym logowaniu)
+const isLogged = (page) => page.evaluate(() => Object.keys(localStorage).some((k) => /auth0spajs.*@@user@@/i.test(k))).catch(() => false);
 
 const ctx = await chromium.launchPersistentContext(`./profiles/${ACC}`, {
   headless: false, viewport: { width: 1400, height: 900 }, locale: 'pl-PL', timezoneId: 'Europe/Warsaw',
@@ -15,7 +16,7 @@ const page = ctx.pages()[0] || await ctx.newPage();
 await page.goto('https://www.olx.pl/', { waitUntil: 'domcontentloaded' }).catch(() => {});
 await sleep(2000);
 
-let logged = await page.locator(LOGGED).first().isVisible({ timeout: 2000 }).catch(() => false);
+let logged = await isLogged(page);
 if (!logged) {
   // zgoda cookies
   for (const s of ['#onetrust-accept-btn-handler', 'button:has-text("Akceptuję")', 'button:has-text("Zaakceptuj")']) {
@@ -29,7 +30,7 @@ if (!logged) {
   }
   console.log(`\n[${ACC}] 👉 ${opened ? 'Formularz logowania otwarty.' : 'Kliknij "Zaloguj się" w oknie.'} Wpisz dane konta ${ACC} (login + hasło) i zaloguj się.`);
   console.log(`[${ACC}] Czekam aż wykryję zalogowanie (max 4 min)...`);
-  for (let t = 0; t < 120 && !logged; t++) { await sleep(2000); logged = await page.locator(LOGGED).first().isVisible({ timeout: 500 }).catch(() => false); }
+  for (let t = 0; t < 120 && !logged; t++) { await sleep(2000); logged = await isLogged(page); }
 }
 if (!logged) { console.log(`[${ACC}] nie wykryłem zalogowania — zamykam (spróbuj ponownie)`); await ctx.close(); process.exit(1); }
 
