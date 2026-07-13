@@ -66,20 +66,21 @@ async function revealBatch(browser, acc, state) {
     page.on('response', onResp);
     try {
       await page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: 40000 });
+      await sleep(4000); // daj stronie się wyrenderować
       if (/login\.olx\.pl/i.test(page.url())) res.expired = true;
       else {
-        // czekaj aż przycisk "Pokaż numer" REALNIE się pojawi (do 10s); brak = ogłoszenie bez numeru
-        const appeared = await page.locator('[data-testid="show-phone"]').first().waitFor({ state: 'visible', timeout: 10000 }).then(() => true).catch(() => false);
-        if (!appeared) noBtn = true;
-        // klik + RETRY aż numer wejdzie — pierwszy klik bywa jałowy (friction SDK się dogrzewa; dowód: konto1 ∅→✅ w 2. turze)
-        for (let attempt = 0; attempt < 3 && !phone && !res.expired && !noBtn; attempt++) {
-          const b = page.locator('[data-testid="show-phone"]').first();
-          if (!(await b.isVisible().catch(() => false))) break;                 // zniknął = odsłonięty albo brak
-          await b.scrollIntoViewIfNeeded().catch(() => {});
-          await b.click({ timeout: 3000 }).catch(() => {});
+        // znajdź PIERWSZY WIDOCZNY przycisk spośród wszystkich dopasowań (nie .first() — bywa ukryty)
+        const findBtn = async () => { const bs = page.locator('[data-testid="show-phone"]'); const n = await bs.count(); for (let i = 0; i < n; i++) { const b = bs.nth(i); if (await b.isVisible().catch(() => false)) return b; } return null; };
+        // klik + RETRY aż numer wejdzie — pierwszy klik bywa jałowy (friction SDK się dogrzewa)
+        for (let attempt = 0; attempt < 4 && !phone && !res.expired; attempt++) {
+          const btn = await findBtn();
+          if (!btn) { await sleep(2500); continue; }                            // jeszcze się nie wyrenderował — poczekaj
+          await btn.scrollIntoViewIfNeeded().catch(() => {});
+          await btn.click({ timeout: 3000 }).catch(() => {});
           clicked = true;
           for (let w = 0; w < 13 && !phone; w++) { await sleep(600); if (/login\.olx\.pl/i.test(page.url())) { res.expired = true; break; } } // poll ~8s na odpowiedź
         }
+        if (!clicked) noBtn = true;                                             // realnie brak przycisku = ogłoszenie bez numeru
       }
     } catch {}
     page.off('response', onResp);
