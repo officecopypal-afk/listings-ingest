@@ -1,0 +1,26 @@
+name: browser reveal test
+on:
+  workflow_dispatch:
+    inputs:
+      proxy_country:
+        description: "kraj proxy"
+        default: "pl"
+jobs:
+  br:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: scraper/olx-reveal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - run: npx patchright install --with-deps chromium
+      - name: browser reveal test
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          PROXY_COUNTRY: ${{ github.event.inputs.proxy_country || 'pl' }}
+        run: node browser_reveal_test.mjs
