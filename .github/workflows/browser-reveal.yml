@@ -1,24 +1,32 @@
 name: OLX browser reveal (Track 2)
 # Silnik rotacyjny: konta w kółko, 5/konto, cooldown 8min per konto. Reveal przez przeglądarkę na sesji.
 on:
+  schedule:
+    - cron: "5 * * * *"    # co godzinę o :05 — SIATKA BEZPIECZEŃSTWA (główna ciągłość: łańcuch na końcu runu)
   workflow_dispatch:
     inputs:
       per_account:
         description: "Ile reveali na konto przed rotacją (limit ~5 przed captchą)"
         default: "5"
       budget_min:
-        description: "Budżet czasu w minutach (test: 4, produkcja: 300)"
-        default: "300"
+        description: "Budżet czasu w minutach (test: 10, produkcja: 720 = 12h)"
+        default: "720"
       cooldown_min:
         description: "Cooldown per konto (min)"
         default: "8"
       only_accounts:
         description: "Test na wybranych kontach, np. konto1,konto2,konto3 (puste = wszystkie z DB)"
         default: ""
+concurrency:
+  group: olx-browser-reveal   # nigdy dwa runy naraz — nowy czeka aż poprzedni skończy
+  cancel-in-progress: false
+permissions:
+  actions: write   # do samo-wywołania następnego runu (łańcuch)
+  contents: read
 jobs:
   reveal:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 730   # > budżet 720min, żeby skrypt zdążył wyjść łagodnie i odpalić łańcuch
     defaults:
       run:
         working-directory: scraper/olx-reveal
@@ -37,7 +45,12 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PER_ACCOUNT: ${{ github.event.inputs.per_account || '5' }}
           COOLDOWN_MIN: ${{ github.event.inputs.cooldown_min || '8' }}
-          BUDGET_MIN: ${{ github.event.inputs.budget_min || '300' }}
+          BUDGET_MIN: ${{ github.event.inputs.budget_min || '720' }}
           ONLY_ACCOUNTS: ${{ github.event.inputs.only_accounts || '' }}
           DEBUG: "1"
         run: xvfb-run -a node browser_revealer.mjs
+      - name: łańcuch — odpal następny run (ciągłość bez luki)
+        if: ${{ success() && github.event.inputs.only_accounts == '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run "OLX browser reveal (Track 2)" --ref "${{ github.ref_name }}"

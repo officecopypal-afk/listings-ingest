@@ -119,7 +119,7 @@ try {
       console.log(`[${acc}] batch: ✅${res.ok} ∅${res.nophone}${res.expired ? ' 🔴WYGASŁA' : ''} | RAZEM ✅${grandOk}`);
       if (res.expired) { dead.add(acc); await slack(`:warning: *OLX konta* — sesja *${acc}* wygasła. Zaloguj: node login_helper.mjs ${acc}`); }
     }
-    if (!anyFetched) { console.log('🎉 kolejka pusta — koniec'); break; }
+    if (!anyFetched) { console.log('kolejka pusta — czekam 5min i sprawdzam ponownie (run żyje do budżetu)'); await sleep(300000); }
   }
 } finally { await browser.close(); }
 console.log(`\n=== KONIEC === ✅ ${grandOk} numerów`);
