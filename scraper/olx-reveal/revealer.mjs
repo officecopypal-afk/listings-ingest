@@ -38,7 +38,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const pm = PROXY.match(/^https?:\/\/([^:]+):([^@]+)@([^:]+):(\d+)$/);
 if (!pm) throw new Error('IPROYAL_PROXY format: http://user:pass@host:port');
 const [, PU, PP, PH, PT] = pm;
-const newAgent = () => new ProxyAgent({ uri: `http://${PH}:${PT}`, token: 'Basic ' + Buffer.from(`${PU}:${PP}_session-${crypto.randomBytes(6).toString('hex')}_lifetime-10m`).toString('base64') });
+// opcjonalna podmiana kraju (rotacja świeżych pul: pl spalone → de/fr/... nietknięte). Podmienia _country-XX w haśle.
+const COUNTRY = (process.env.PROXY_COUNTRY || '').trim().toLowerCase();
+const PPc = !COUNTRY ? PP : (/_country-[a-z]{2}/i.test(PP) ? PP.replace(/_country-[a-z]{2}/i, `_country-${COUNTRY}`) : `${PP}_country-${COUNTRY}`);
+const newAgent = () => new ProxyAgent({ uri: `http://${PH}:${PT}`, token: 'Basic ' + Buffer.from(`${PU}:${PPc}_session-${crypto.randomBytes(6).toString('hex')}_lifetime-10m`).toString('base64') });
 
 async function rpc(fn, body) {
   const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
@@ -114,7 +117,7 @@ async function processBatch() {
   return { fetched: queue.length, ok: batchOk };
 }
 
-console.log(`start | LOOP=${LOOP} CONC=${CONCURRENCY} MAX=${MAX} CAP_PER_IP=${CAP_PER_IP} | wypalonych IP: ${burnedSet.size}`);
+console.log(`start | LOOP=${LOOP} CONC=${CONCURRENCY} MAX=${MAX} CAP_PER_IP=${CAP_PER_IP} | kraj: ${COUNTRY || 'pl(domyślny)'} | wypalonych IP: ${burnedSet.size}`);
 const start = Date.now();
 let dryStreak = 0, batches = 0;
 while (true) {

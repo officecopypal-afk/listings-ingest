@@ -14,6 +14,9 @@ on:
       concurrency:
         description: "Ile workerów równolegle (każdy na swoim IP)"
         default: "5"
+      proxy_country:
+        description: "Kraj proxy (pl/de/fr/...) — świeża pula IP"
+        default: "pl"
   # cron WYŁĄCZONY (12.07 wieczór) — cały pool IPRoyal rozgrzany hurtem reveali; ostudzenie.
   # Włączyć z powrotem GENTLE (rzadziej, mniejszy MAX) dopiero po potwierdzeniu że throttle opadł.
   # schedule:
@@ -46,6 +49,7 @@ jobs:
           CONCURRENCY: ${{ github.event.inputs.concurrency || '5' }}
           CAP_PER_IP: ${{ github.event.inputs.cap_per_ip || '1' }}
           MAX_IP_TRIES: "4"
+          PROXY_COUNTRY: ${{ github.event.inputs.proxy_country || 'pl' }}
         run: node revealer.mjs
       - name: Slack alert on failure
         if: failure()
