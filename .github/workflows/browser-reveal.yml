@@ -1,0 +1,31 @@
+name: OLX browser reveal (Track 2)
+# Reveal przez przeglądarkę na zalogowanej sesji (rozwiązuje "blank"). v1: jedno konto.
+on:
+  workflow_dispatch:
+    inputs:
+      max:
+        description: "Ile reveali (limit per konto ~5 przed captchą)"
+        default: "5"
+jobs:
+  reveal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: scraper/olx-reveal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install patchright --no-audit --no-fund
+      - run: npx patchright install --with-deps chromium
+      - name: browser reveal
+        env:
+          OLX_SESSION: ${{ secrets.OLX_SESSION }}
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MAX: ${{ github.event.inputs.max || '5' }}
+          ACC_NAME: "konto1"
+        run: node browser_revealer.mjs
