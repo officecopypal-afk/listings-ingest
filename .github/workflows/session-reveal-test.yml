@@ -1,0 +1,22 @@
+name: session reveal test
+on:
+  workflow_dispatch:
+jobs:
+  sr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: scraper/olx-reveal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - name: session reveal test
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          OLX_FP: ${{ secrets.OLX_FP }}
+          OLX_SESSION: ${{ secrets.OLX_SESSION }}
+        run: node session_reveal_test.mjs
