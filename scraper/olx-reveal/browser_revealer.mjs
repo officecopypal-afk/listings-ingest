@@ -29,13 +29,14 @@ const keyFor = (acc, salt) => crypto.createHash('md5').update(salt ? `${acc}:${s
 const passFor = (key) => `${pm[2]}_country-pl_session-${key}_lifetime-${LIFETIME}`;
 const proxyForKey = (key) => ({ server: `http://${pm[3]}:${pm[4]}`, username: pm[1], password: passFor(key) });
 const ipVia = async (key) => { try { const a = new ProxyAgent(`http://${pm[1]}:${passFor(key)}@${pm[3]}:${pm[4]}`); const r = await fetch('https://api.ipify.org?format=json', { dispatcher: a, signal: AbortSignal.timeout(15000) }); return (await r.json()).ip; } catch { return null; } };
+let ipSalts = {}; // nadpisania salta per konto (gdy domyślny IP martwy) — dociągane z DB na starcie
 
 async function rpc(fn, body) { const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }); const t = await r.text(); if (!r.ok) throw new Error(`${fn} ${r.status}`); return t ? JSON.parse(t) : null; }
 async function slack(text) { try { await fetch(`${SB_URL}/functions/v1/scraper-alert`, { method: 'POST', headers: { authorization: `Bearer ${SB_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ text }) }); } catch {} }
 
 // 1 KONTO = 1 STAŁY IP (deterministyczny md5 z nazwy konta). ZERO re-rollingu — ten sam IP co zawsze. Log tylko dla pewności.
 async function proxyKeyFor(acc) {
-  const key = keyFor(acc);
+  const key = keyFor(acc, ipSalts[acc] || 0);                    // salt>0 = wymieniony martwy IP (nadal stały)
   const ip = await ipVia(key).catch(() => null);
   console.log(`  [${acc}] 🌐 stały IP: ${ip || '(nie sprawdzono)'} — ten sam co zawsze, trzymam ${LIFETIME}`);
   if (ip) { try { await rpc('leads_olx_ip_seen', { p_name: acc, p_ip: ip }); } catch {} } // zapis do śledzenia zmian IP
@@ -103,6 +104,7 @@ async function revealBatch(browser, acc, state) {
 // Sesje z DB (leads.olx_sessions), gdy nie podano w env — DB = źródło prawdy (za duże na sekret GH: 64KB)
 if (!names.length) { accounts = await rpc('leads_get_olx_sessions').catch(() => ({})); names = Object.keys(accounts || {}); console.log(`sesje z DB: ${names.length}`); }
 if (process.env.ONLY_ACCOUNTS) { const only = new Set(process.env.ONLY_ACCOUNTS.split(',').map((s) => s.trim())); names = names.filter((n) => only.has(n)); }
+try { for (const r of (await rpc('leads_get_ip_salts').catch(() => []))) ipSalts[r.name] = r.salt; if (Object.keys(ipSalts).length) console.log('salt-override IP:', JSON.stringify(ipSalts)); } catch {} // konta z wymienionym martwym IP
 console.log(`konta: ${names.join(', ') || 'BRAK'} | PER_ACCOUNT=${PER_ACCOUNT} | cooldown=${COOLDOWN_MS / 60000}min | budżet=${Math.round(BUDGET_MS / 60000)}min`);
 if (!names.length) { console.log('brak sesji (OLX_SESSION/OLX_SESSIONS)'); process.exit(1); }
 const browser = await chromium.launch({ headless: false, args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'] }); // headful (przez xvfb) — headless wykrywany przez OLX
