@@ -42,7 +42,7 @@ jobs:
           CAP_PER_IP: "6"
           MAX_IP_TRIES: "4"
           DEFER_MIN: "10"
-          PROXY_COUNTRY: "pl"
+          PROXY_COUNTRIES: "pl,ua,ro,de,gb,pt,bg"
         run: node revealer.mjs
       - name: Slack alert on failure
         if: failure()
