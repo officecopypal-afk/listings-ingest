@@ -19,13 +19,13 @@ const SB_URL = (process.env.SUPABASE_URL || '').trim();
 const SB_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 const CONCURRENCY = Number(process.env.CONCURRENCY || 6);
 const MAX = Number(process.env.MAX || 120);
-const CAP_PER_IP = Number(process.env.CAP_PER_IP || 1); // 1 IP na 1 link (ludzko + minimum palenia); fallback: podbić na 3/5
+const CAP_PER_IP = Number(process.env.CAP_PER_IP || 6); // OLX rate-limit ~5-6/IP potem karny box ~10min → wyciągnij limit z IP, potem rotuj
 const MAX_IP_TRIES = Number(process.env.MAX_IP_TRIES || 4);
 const TIMEOUT = Number(process.env.FETCH_TIMEOUT_MS || 15000);
-const COOLDOWN_H = Number(process.env.IP_COOLDOWN_HOURS || 12);
+const COOLDOWN_H = Number(process.env.IP_COOLDOWN_HOURS || 0.34); // ~20min: kara OLX jest krótka (~10min), nie pal IP na 12h
 const LOOP = process.env.LOOP_UNTIL_EMPTY === '1';
 const BUDGET_MS = Number(process.env.RUN_BUDGET_MS || 19 * 60 * 1000);
-const DEFER_MIN = Number(process.env.DEFER_MIN || 25);
+const DEFER_MIN = Number(process.env.DEFER_MIN || 10);
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
 const ALPHA = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -60,6 +60,7 @@ async function reveal(adId, dispatcher) {
     const username = crypto.randomUUID();
     const ch = await fetch('https://friction.olxgroup.com/challenge', { method: 'POST', headers: FH, dispatcher, signal: AbortSignal.timeout(TIMEOUT), body: JSON.stringify({ action: 'reveal_phone_number', aud: 'atlas', actor: { username }, scene: { origin: 'www.olx.pl', sitecode: 'olxpl', ad_id: String(adId) } }) });
     const chj = await ch.json().catch(() => null);
+    if (chj?.challenge?.type === 'delay') return { status: 'delay' };     // IP w karnym boxie OLX (~10min) — rotuj na świeże, NIE pal
     if (!chj?.context) return { status: 'neterr' };
     const ex = await fetch('https://friction.olxgroup.com/exchange', { method: 'POST', headers: FH, dispatcher, signal: AbortSignal.timeout(TIMEOUT), body: JSON.stringify({ context: chj.context }) });
     const exj = await ex.json().catch(() => null);
@@ -78,7 +79,7 @@ async function reveal(adId, dispatcher) {
   } catch (e) { return { status: 'neterr', detail: String(e.cause?.code || e.name || '').slice(0, 30) }; }
 }
 
-const grand = { ok: 0, inactive: 0, nophone: 0, throttle: 0, error: 0, ip: 0 };
+const grand = { ok: 0, inactive: 0, nophone: 0, throttle: 0, delay: 0, error: 0, ip: 0 };
 const burn = (ip) => { if (ip) { toBurn.add(ip); burnedSet.add(ip); } };
 
 async function processBatch() {
@@ -96,7 +97,8 @@ async function processBatch() {
       let r, done = false;
       for (let t = 0; t < MAX_IP_TRIES && !done; t++) {
         r = await reveal(adId, agent); onIp++;
-        if (r.status === 'throttle') { burn(r.ip); rotate(); continue; }   // spalone IP → świeże, ponów ad
+        if (r.status === 'delay') { grand.delay++; rotate(); continue; }   // IP w karze OLX → świeże, ponów ad (bez palenia)
+        if (r.status === 'throttle') { burn(r.ip); rotate(); continue; }   // rate-limit IP → świeże (krótki cooldown), ponów ad
         if (r.status === 'neterr') { rotate(); continue; }
         done = true;
       }
@@ -123,7 +125,7 @@ let dryStreak = 0, batches = 0;
 while (true) {
   const res = await processBatch();
   batches++;
-  console.log(`batch #${batches}: pobrano ${res.fetched}, numerów ${res.ok} | RAZEM ✅ ${grand.ok} | ⊘ ${grand.inactive} | ∅ ${grand.nophone} | ⏳ odroczono ${grand.throttle} | ✗ ${grand.error} | IP ${grand.ip}`);
+  console.log(`batch #${batches}: pobrano ${res.fetched}, numerów ${res.ok} | RAZEM ✅ ${grand.ok} | ⊘ ${grand.inactive} | ∅ ${grand.nophone} | 🔄 delay ${grand.delay} | ⛔ rate ${grand.throttle} | ✗ ${grand.error} | IP ${grand.ip}`);
   if (!LOOP) break;
   if (Date.now() - start > BUDGET_MS) { console.log('budżet czasu wyczerpany'); break; }
   if (res.fetched === 0) {
@@ -134,5 +136,5 @@ while (true) {
   } else if (res.ok === 0) { dryStreak++; const w = Math.min(3 * 60_000, 30_000 * dryStreak); console.log(`batch bez numeru (${dryStreak}) — śpię ${Math.round(w / 1000)}s...`); await sleep(w); }
   else dryStreak = 0;
 }
-console.log(`\n=== KONIEC RUNU === ✅ ${grand.ok} | ⊘ ${grand.inactive} | ∅ ${grand.nophone} | ⏳ odroczono ${grand.throttle} | ✗ ${grand.error} | IP użytych ${grand.ip}`);
+console.log(`\n=== KONIEC RUNU === ✅ ${grand.ok} | ⊘ ${grand.inactive} | ∅ ${grand.nophone} | 🔄 delay ${grand.delay} | ⛔ rate ${grand.throttle} | ✗ ${grand.error} | IP użytych ${grand.ip}`);
 process.exit(grand.ok === 0 && grand.error >= 15 ? 1 : 0);
