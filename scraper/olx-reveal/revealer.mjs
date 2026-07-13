@@ -15,6 +15,7 @@ import crypto from 'crypto';
 
 const PROXY = process.env.IPROYAL_PROXY;
 const FP = JSON.parse(process.env.OLX_FP);
+const RANDOM_FP = process.env.RANDOM_FP === '1'; // świeży losowy x-fingerprint per reveal (test: czy stały FP zflagowany)
 const SB_URL = (process.env.SUPABASE_URL || '').trim();
 const SB_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 const CONCURRENCY = Number(process.env.CONCURRENCY || 6);
@@ -83,7 +84,8 @@ async function reveal(adId, dispatcher) {
     if (!exj?.token) return { status: 'neterr' };
     const ip = tokenIp(exj.token);
     if (ip && burnedSet.has(ip)) return { status: 'throttle', ip };          // znane spalone → rotuj bez limited-phones
-    const lp = await fetch('https://www.olx.pl/api/v1/offers/' + adId + '/limited-phones/', { dispatcher, signal: AbortSignal.timeout(TIMEOUT), headers: { 'friction-token': exj.token, 'x-fingerprint': FP.x_fingerprint, 'x-device-id': crypto.randomUUID(), 'x-client': 'DESKTOP', 'x-platform-type': 'mobile-html5', version: 'v1.19', accept: 'application/json', 'accept-language': 'pl', 'user-agent': UA, origin: 'https://www.olx.pl', referer: 'https://www.olx.pl/' } });
+    const xfp = RANDOM_FP ? crypto.randomBytes(392).toString('hex') : FP.x_fingerprint; // test: świeży odcisk per reveal (czy stały FP zflagowany?)
+    const lp = await fetch('https://www.olx.pl/api/v1/offers/' + adId + '/limited-phones/', { dispatcher, signal: AbortSignal.timeout(TIMEOUT), headers: { 'friction-token': exj.token, 'x-fingerprint': xfp, 'x-device-id': crypto.randomUUID(), 'x-client': 'DESKTOP', 'x-platform-type': 'mobile-html5', version: 'v1.19', accept: 'application/json', 'accept-language': 'pl', 'user-agent': UA, origin: 'https://www.olx.pl', referer: 'https://www.olx.pl/' } });
     const b = await lp.text().catch(() => '');
     let j = null; try { j = JSON.parse(b); } catch {}
     if (j?.data?.phones?.[0]) return { status: 'ok', phones: j.data.phones, ip };

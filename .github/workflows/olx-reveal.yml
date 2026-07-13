@@ -20,6 +20,9 @@ on:
       proxy_countries:
         description: "Lista krajów do rotacji, np pl,ua,ro,de,gb (pusta = pojedynczy)"
         default: ""
+      random_fp:
+        description: "1 = losowy x-fingerprint per reveal (test flagowania FP)"
+        default: ""
   # cron WYŁĄCZONY (12.07 wieczór) — cały pool IPRoyal rozgrzany hurtem reveali; ostudzenie.
   # Włączyć z powrotem GENTLE (rzadziej, mniejszy MAX) dopiero po potwierdzeniu że throttle opadł.
   # schedule:
@@ -54,6 +57,7 @@ jobs:
           MAX_IP_TRIES: "4"
           PROXY_COUNTRY: ${{ github.event.inputs.proxy_country || 'pl' }}
           PROXY_COUNTRIES: ${{ github.event.inputs.proxy_countries || '' }}
+          RANDOM_FP: ${{ github.event.inputs.random_fp || '' }}
         run: node revealer.mjs
       - name: Slack alert on failure
         if: failure()
