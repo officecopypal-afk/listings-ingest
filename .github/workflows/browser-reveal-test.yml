@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm install --no-audit --no-fund
+      - run: npm install patchright --no-audit --no-fund
       - run: npx patchright install --with-deps chromium
       - name: browser reveal test
         env:
