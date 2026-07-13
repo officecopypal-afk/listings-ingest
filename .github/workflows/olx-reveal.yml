@@ -7,13 +7,13 @@ on:
     inputs:
       max:
         description: "Ile ogłoszeń z kolejki"
-        default: "300"
+        default: "50"
       cap_per_ip:
         description: "Reveali na jedno IP (limit OLX ~5-6, potem kara ~10min)"
-        default: "6"
+        default: "5"
       concurrency:
         description: "Ile workerów równolegle (każdy na swoim IP)"
-        default: "30"
+        default: "10"
       proxy_country:
         description: "Kraj proxy (pl/de/fr/...) — świeża pula IP"
         default: "pl"
@@ -23,10 +23,9 @@ on:
       random_fp:
         description: "1 = losowy x-fingerprint per reveal (test flagowania FP)"
         default: ""
-  # cron WYŁĄCZONY (12.07 wieczór) — cały pool IPRoyal rozgrzany hurtem reveali; ostudzenie.
-  # Włączyć z powrotem GENTLE (rzadziej, mniejszy MAX) dopiero po potwierdzeniu że throttle opadł.
-  # schedule:
-  #   - cron: "*/10 * * * *"
+  # GENTLE probe co ~2h: mały batch po rotujących krajach, seal 12h. Jak blokada OLX minie — wznowi sam.
+  schedule:
+    - cron: "23 */2 * * *"
 
 concurrency:
   group: olx-reveal
@@ -51,12 +50,14 @@ jobs:
           OLX_FP: ${{ secrets.OLX_FP }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          MAX: ${{ github.event.inputs.max || '300' }}
-          CONCURRENCY: ${{ github.event.inputs.concurrency || '30' }}
-          CAP_PER_IP: ${{ github.event.inputs.cap_per_ip || '6' }}
+          MAX: ${{ github.event.inputs.max || '50' }}
+          CONCURRENCY: ${{ github.event.inputs.concurrency || '10' }}
+          CAP_PER_IP: ${{ github.event.inputs.cap_per_ip || '5' }}
           MAX_IP_TRIES: "4"
+          IP_COOLDOWN_HOURS: "12"
+          DEFER_MIN: "25"
           PROXY_COUNTRY: ${{ github.event.inputs.proxy_country || 'pl' }}
-          PROXY_COUNTRIES: ${{ github.event.inputs.proxy_countries || '' }}
+          PROXY_COUNTRIES: ${{ github.event.inputs.proxy_countries || 'pl,ua,ro,de,gb' }}
           RANDOM_FP: ${{ github.event.inputs.random_fp || '' }}
         run: node revealer.mjs
       - name: Slack alert on failure
