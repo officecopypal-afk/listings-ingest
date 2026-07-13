@@ -1,0 +1,25 @@
+name: proxy sticky test
+on:
+  workflow_dispatch:
+    inputs:
+      proxy_country:
+        description: "kraj proxy"
+        default: "pl"
+jobs:
+  stick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: scraper/olx-reveal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - name: sticky test
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          PROXY_COUNTRY: ${{ github.event.inputs.proxy_country || 'pl' }}
+        run: node sticktest.mjs
