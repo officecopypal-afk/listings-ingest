@@ -1,0 +1,20 @@
+name: raw diag (co OLX zwraca)
+on:
+  workflow_dispatch:
+jobs:
+  rd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: scraper/olx-reveal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - name: raw diag
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+        run: node rawdiag.mjs
