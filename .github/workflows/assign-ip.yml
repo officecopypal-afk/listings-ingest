@@ -1,0 +1,28 @@
+name: OLX assign IP (poza runem)
+# Przypisuje/odświeża IP kont przez proxy i zapisuje do DB. Odpalane RĘCZNIE kiedykolwiek — też w trakcie runu reveala.
+# Brak concurrency group → nie koliduje z workflowem reveala. Nie używa przeglądarki (tylko undici), więc lekkie/szybkie.
+on:
+  workflow_dispatch:
+    inputs:
+      accounts:
+        description: "Konta oddzielone spacją, np. konto13 konto14 (puste = wszystkie z DB)"
+        default: ""
+jobs:
+  assign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: scraper/olx-reveal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install undici --no-audit --no-fund
+      - name: assign IP
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node assign_ip.mjs ${{ github.event.inputs.accounts }}

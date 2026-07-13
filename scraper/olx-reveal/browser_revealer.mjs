@@ -1,7 +1,7 @@
-/** Track 2 — SILNIK ROTACYJNY: konta w kółko, 5 reveali/konto, cooldown 8min per konto od startu sekwencji.
- *  Reveal przez przeglądarkę na zalogowanej sesji (rozwiązuje "blank"). Najświeższe ogłoszenia najpierw (RPC).
- *  Sesje: OLX_SESSIONS = {"konto1":<storageState>,...}  albo pojedynczy OLX_SESSION (=konto1).
- *  Env: IPROYAL_PROXY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PER_ACCOUNT(5), COOLDOWN_MIN(8), BUDGET_MS. */
+/** Track 2 — SILNIK FALOWY: co WAVE_INTERVAL puszcza falę WAVE_SIZE kont RÓWNOLEGLE, cooldown 8min per konto.
+ *  Każde konto: 5 REALNYCH kliknięć/sekwencję (bez-numeru pomijamy, nie liczą się). Reveal przez przeglądarkę na sesji.
+ *  Sesje z DB (leads.olx_sessions). Każde konto = własne stałe IP (md5) → równoległość bez kolizji.
+ *  Env: IPROYAL_PROXY, SUPABASE_*, PER_ACCOUNT(5), SCAN_CAP(15), COOLDOWN_MIN(8), WAVE_SIZE(3), WAVE_INTERVAL_MIN(2), BUDGET_MIN. */
 import { chromium } from 'patchright';
 import crypto from 'crypto';
 import { ProxyAgent } from 'undici';
@@ -14,7 +14,8 @@ let names = Object.keys(accounts); // jeśli puste — dociągniemy z DB niżej 
 const PROXY = process.env.IPROYAL_PROXY;
 const SB_URL = (process.env.SUPABASE_URL || '').trim();
 const SB_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-const PER_ACCOUNT = Number(process.env.PER_ACCOUNT || 5);
+const PER_ACCOUNT = Number(process.env.PER_ACCOUNT || 5);        // liczba REALNYCH kliknięć „Pokaż numer" na sekwencję
+const SCAN_CAP = Number(process.env.SCAN_CAP || 15);             // ile linków max przeskanować żeby znaleźć PER_ACCOUNT klikalnych (bez-numeru pomijamy)
 const COOLDOWN_MS = Number(process.env.COOLDOWN_MIN || 8) * 60000;
 const BUDGET_MS = Number(process.env.BUDGET_MIN || 300) * 60000; // minuty → ms
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
@@ -42,8 +43,8 @@ async function proxyKeyFor(acc) {
 }
 
 async function revealBatch(browser, acc, state) {
-  const res = { ok: 0, nophone: 0, expired: false, fetched: 0 };
-  const queue = await rpc('leads_get_reveal_queue', { p_portal: 'olx', p_limit: PER_ACCOUNT }).catch(() => []);
+  const res = { ok: 0, nophone: 0, skipped: 0, expired: false, fetched: 0, loggedIn: false };
+  const queue = await rpc('leads_claim_reveal_queue', { p_portal: 'olx', p_limit: SCAN_CAP }).catch(() => []); // atomowy claim (SKIP LOCKED) — równoległe workery nie biorą tych samych
   res.fetched = queue?.length || 0;
   if (!res.fetched) return res;
   const key = await proxyKeyFor(acc);
@@ -54,10 +55,12 @@ async function revealBatch(browser, acc, state) {
   // ROZGRZEWKA sesji: wejdź na home, daj Auth0 SDK zainicjować i odświeżyć token, zanim revealujesz
   await page.goto('https://www.olx.pl/', { waitUntil: 'domcontentloaded', timeout: 40000 }).catch(() => {});
   await sleep(7000);
-  const loggedIn = await page.locator('[data-testid="my-account-menu"], [data-testid="header-user-menu"], a[href*="/mojolx"], a[href*="/konto"]').first().isVisible({ timeout: 2500 }).catch(() => false);
-  console.log(`  [${acc}] rozgrzewka: zalogowany=${loggedIn}`);
-  if (loggedIn) { try { await rpc('leads_upsert_olx_session', { p_name: acc, p_state: await ctx.storageState() }); } catch {} } // zapisz odświeżone tokeny do DB
+  res.loggedIn = await page.locator('[data-testid="my-account-menu"], [data-testid="header-user-menu"], a[href*="/mojolx"], a[href*="/konto"]').first().isVisible({ timeout: 2500 }).catch(() => false);
+  console.log(`  [${acc}] rozgrzewka: zalogowany=${res.loggedIn}`);
+  if (res.loggedIn) { try { await rpc('leads_upsert_olx_session', { p_name: acc, p_state: await ctx.storageState() }); } catch {} } // zapisz odświeżone tokeny do DB
+  let clicks = 0;                                                          // liczą się TYLKO realne kliknięcia (do PER_ACCOUNT), nie ogłoszenia bez numeru
   for (const row of queue) {
+    if (clicks >= PER_ACCOUNT) break;                                      // 5 realnych prób = koniec sekwencji (anti-captcha)
     let phone = null, lpStatus = null, lpBody = '', blank = false, clicked = false, noBtn = false;
     const onResp = async (resp) => {
       const u = resp.url();
@@ -87,8 +90,10 @@ async function revealBatch(browser, acc, state) {
     page.off('response', onResp);
     if (DEBUG) { const cont = await page.locator('[data-testid="phones-container"]').first().innerText().catch(() => ''); console.log(`  [dbg] ...${row.url.slice(-28)} klik:${clicked} nobtn:${noBtn} login:${/login\.olx/i.test(page.url())} blank:${blank} lp:${lpStatus || '—'} cont:"${cont.replace(/\s+/g, ' ').slice(0, 22)}" ${lpBody ? lpBody.slice(0, 45) : ''}`); }
     if (res.expired) break;
+    if (noBtn) { res.skipped++; await rpc('leads_mark_reveal_fail', { p_id: row.id, p_minutes: 180, p_reason: 'no_button' }).catch(() => {}); continue; } // BEZ NUMERU (nie klikaliśmy) — NIE liczy się do PER_ACCOUNT, mijamy
+    clicks++;                                                              // kliknęliśmy przycisk = realna próba, liczy się do 5
     if (phone) { const norm = normPhone(phone); try { const r = await rpc('leads_ingest_offer', { p_offer: { url: row.url, portal: 'olx', portal_listing_id: suffix(row.url), property_type: row.property_type, transaction_type: row.transaction_type, phone: norm, raw: { source: 'olx-browser' } } }); console.log(`  [${acc}] ✅ ${phone} (sms:${r?.sms_status || '?'})`); res.ok++; } catch {} }
-    else { res.nophone++; await rpc('leads_mark_reveal_fail', { p_id: row.id, p_minutes: noBtn ? 180 : 30, p_reason: noBtn ? 'no_button' : 'no_reveal' }).catch(() => {}); } // +1 próba, powód, odroczenie (brak przycisku = dłużej, zwykle stałe)
+    else { res.nophone++; await rpc('leads_mark_reveal_fail', { p_id: row.id, p_minutes: 30, p_reason: 'no_reveal' }).catch(() => {}); }
     await sleep(2500 + Math.random() * 2500);
   }
   await ctx.close().catch(() => {});
@@ -101,27 +106,43 @@ if (process.env.ONLY_ACCOUNTS) { const only = new Set(process.env.ONLY_ACCOUNTS.
 console.log(`konta: ${names.join(', ') || 'BRAK'} | PER_ACCOUNT=${PER_ACCOUNT} | cooldown=${COOLDOWN_MS / 60000}min | budżet=${Math.round(BUDGET_MS / 60000)}min`);
 if (!names.length) { console.log('brak sesji (OLX_SESSION/OLX_SESSIONS)'); process.exit(1); }
 const browser = await chromium.launch({ headless: false, args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'] }); // headful (przez xvfb) — headless wykrywany przez OLX
-const dead = new Set(), lastStart = {}; const start = Date.now(); let grandOk = 0;
+const WAVE_SIZE = Number(process.env.WAVE_SIZE || 3);            // ile kont ruszamy w jednej fali
+const WAVE_INTERVAL_MS = Number(process.env.WAVE_INTERVAL_MIN || 2) * 60000; // co ile odpalamy następną falę
+const MAX_CONCURRENT = WAVE_SIZE * 2;                           // bezpiecznik: nie rozjedź się gdy batche wolne
+const dead = new Set(), lastStart = {}, running = new Set(), expiredHits = {};
+const start = Date.now(); let grandOk = 0;
+console.log(`FALE: ${WAVE_SIZE} kont co ${WAVE_INTERVAL_MS / 60000}min | cooldown ${COOLDOWN_MS / 60000}min/konto | max równolegle ${MAX_CONCURRENT} | inne IP = brak kolizji`);
+
+// jedno konto: start (uruchamia jego cooldown) → batch → obsługa wyniku. Fałszywe „dead" dopiero po 2 redirectach.
+async function runAcc(acc) {
+  running.add(acc); lastStart[acc] = Date.now();               // start sekwencji = teraz (cooldown 8min liczy się stąd)
+  try {
+    const res = await revealBatch(browser, acc, accounts[acc]);
+    grandOk += res.ok;
+    if (res.ok > 0 || res.loggedIn) expiredHits[acc] = 0;      // konto ewidentnie żyje → zeruj licznik redirectów
+    if (res.expired) {
+      expiredHits[acc] = (expiredHits[acc] || 0) + 1;
+      if (expiredHits[acc] >= 2) { dead.add(acc); await slack(`:warning: *OLX konta* — sesja *${acc}* padła (2× redirect na login). Zaloguj: node login_helper.mjs ${acc}`); }
+      else console.log(`[${acc}] redirect na login (${expiredHits[acc]}/2) — NIE zabijam (może proxy), ponowię`);
+    }
+    console.log(`[${acc}] batch: ✅${res.ok} ∅${res.nophone}${res.skipped ? ' ⤳' + res.skipped + 'bez-num' : ''}${res.expired ? ' 🔴' : ''} | RAZEM ✅${grandOk}`);
+  } catch (e) { console.log(`[${acc}] błąd: ${String(e.message).slice(0, 60)}`); }
+  running.delete(acc);
+}
+
 try {
   while (Date.now() - start < BUDGET_MS) {
-    const live = names.filter((n) => !dead.has(n));
-    if (!live.length) { console.log('wszystkie sesje padły'); break; }
-    let anyFetched = false;
-    for (const acc of live) {
-      if (dead.has(acc)) continue;
-      const wait = COOLDOWN_MS - (Date.now() - (lastStart[acc] || 0));
-      if (wait > 0) {
-        if (Date.now() - start + wait > BUDGET_MS) { console.log('budżet — koniec'); break; }
-        console.log(`[${acc}] cooldown 8min — czekam ${Math.round(wait / 1000)}s...`); await sleep(wait);
-      }
-      lastStart[acc] = Date.now();                          // start sekwencji konta = teraz
-      const res = await revealBatch(browser, acc, accounts[acc]);
-      grandOk += res.ok; if (res.fetched > 0) anyFetched = true;
-      console.log(`[${acc}] batch: ✅${res.ok} ∅${res.nophone}${res.expired ? ' 🔴WYGASŁA' : ''} | RAZEM ✅${grandOk}`);
-      if (res.expired) { dead.add(acc); await slack(`:warning: *OLX konta* — sesja *${acc}* wygasła. Zaloguj: node login_helper.mjs ${acc}`); }
+    if (names.every((n) => dead.has(n))) { console.log('wszystkie konta padły'); break; }
+    if (running.size < MAX_CONCURRENT) {
+      const pool = names
+        .filter((acc) => !dead.has(acc) && !running.has(acc) && Date.now() - (lastStart[acc] || 0) >= COOLDOWN_MS) // żywe, po cooldownie, nie mielone
+        .sort((a, b) => (lastStart[a] || 0) - (lastStart[b] || 0))    // najdawniej ruszane pierwsze
+        .slice(0, WAVE_SIZE);
+      for (const acc of pool) runAcc(acc);                            // FALA: fire-and-forget → konta jadą równolegle
     }
-    if (!anyFetched) { console.log('kolejka pusta — czekam 5min i sprawdzam ponownie (run żyje do budżetu)'); await sleep(300000); }
+    await sleep(WAVE_INTERVAL_MS);                                    // następna fala za ~2 min (zazębia się)
   }
+  while (running.size && Date.now() - start < BUDGET_MS + 300000) await sleep(3000); // dokończ trwające batche
 } finally { await browser.close(); }
 console.log(`\n=== KONIEC === ✅ ${grandOk} numerów`);
 process.exit(0);
