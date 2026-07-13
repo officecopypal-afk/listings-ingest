@@ -17,6 +17,7 @@ const PER_ACCOUNT = Number(process.env.PER_ACCOUNT || 5);
 const COOLDOWN_MS = Number(process.env.COOLDOWN_MIN || 8) * 60000;
 const BUDGET_MS = Number(process.env.BUDGET_MIN || 300) * 60000; // minuty → ms
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
+const DEBUG = process.env.DEBUG === '1';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const suffix = (u) => { const m = u.match(/-ID([0-9A-Za-z]+)\.html/i); return m ? m[1] : null; };
 const normPhone = (s) => { const d = String(s).replace(/\D/g, ''); if (d.length === 9) return '+48' + d; if (d.length === 11 && d.startsWith('48')) return '+' + d; return d.length >= 9 ? '+48' + d.slice(-9) : null; };
@@ -34,7 +35,12 @@ async function revealBatch(browser, acc, state) {
   const ctx = await browser.newContext({ proxy: proxyFor(acc), storageState: state, locale: 'pl-PL', timezoneId: 'Europe/Warsaw', viewport: { width: 1366, height: 900 }, userAgent: UA });
   const page = await ctx.newPage();
   await page.route('**/*', (r) => (['image', 'media', 'font'].includes(r.request().resourceType()) ? r.abort() : r.continue()));
-  const DEBUG = process.env.DEBUG === '1';
+  if (DEBUG) page.on('console', (m) => { if (m.type() === 'error' && !/ERR_FAILED|net::|status of 4|status of 5/i.test(m.text())) console.log('  [con.err]', m.text().slice(0, 85)); });
+  // ROZGRZEWKA sesji: wejdź na home, daj Auth0 SDK zainicjować i odświeżyć token, zanim revealujesz
+  await page.goto('https://www.olx.pl/', { waitUntil: 'domcontentloaded', timeout: 40000 }).catch(() => {});
+  await sleep(7000);
+  const loggedIn = await page.locator('[data-testid="my-account-menu"], [data-testid="header-user-menu"], a[href*="/mojolx"], a[href*="/konto"]').first().isVisible({ timeout: 2500 }).catch(() => false);
+  console.log(`  [${acc}] rozgrzewka: zalogowany=${loggedIn}`);
   for (const row of queue) {
     let phone = null, lpStatus = null, lpBody = '', blank = false, clicked = false;
     const onResp = async (resp) => {
@@ -45,7 +51,7 @@ async function revealBatch(browser, acc, state) {
     page.on('response', onResp);
     try {
       await page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: 40000 });
-      await sleep(2000);
+      await sleep(5000);
       if (/login\.olx\.pl/i.test(page.url())) res.expired = true;
       else {
         const btns = page.locator('[data-testid="show-phone"]'); const n = await btns.count();
