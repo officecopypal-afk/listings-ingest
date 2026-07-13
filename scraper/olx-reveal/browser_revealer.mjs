@@ -30,6 +30,7 @@ const passFor = (key) => `${pm[2]}_country-pl_session-${key}_lifetime-${LIFETIME
 const proxyForKey = (key) => ({ server: `http://${pm[3]}:${pm[4]}`, username: pm[1], password: passFor(key) });
 const ipVia = async (key) => { try { const a = new ProxyAgent(`http://${pm[1]}:${passFor(key)}@${pm[3]}:${pm[4]}`); const r = await fetch('https://api.ipify.org?format=json', { dispatcher: a, signal: AbortSignal.timeout(15000) }); return (await r.json()).ip; } catch { return null; } };
 let ipSalts = {}; // nadpisania salta per konto (gdy domyślny IP martwy) — dociągane z DB na starcie
+let cooledUntil = {}; // acc → ms do kiedy konto studzone po captchy (nie ruszamy go)
 
 async function rpc(fn, body) { const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }); const t = await r.text(); if (!r.ok) throw new Error(`${fn} ${r.status}`); return t ? JSON.parse(t) : null; }
 async function slack(text) { try { await fetch(`${SB_URL}/functions/v1/scraper-alert`, { method: 'POST', headers: { authorization: `Bearer ${SB_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ text }) }); } catch {} }
@@ -44,7 +45,7 @@ async function proxyKeyFor(acc) {
 }
 
 async function revealBatch(browser, acc, state) {
-  const res = { ok: 0, nophone: 0, skipped: 0, expired: false, fetched: 0, loggedIn: false };
+  const res = { ok: 0, nophone: 0, skipped: 0, expired: false, fetched: 0, loggedIn: false, captcha: false };
   const queue = await rpc('leads_claim_reveal_queue', { p_portal: 'olx', p_limit: SCAN_CAP }).catch(() => []); // atomowy claim (SKIP LOCKED) — równoległe workery nie biorą tych samych
   res.fetched = queue?.length || 0;
   if (!res.fetched) return res;
@@ -62,10 +63,10 @@ async function revealBatch(browser, acc, state) {
   let clicks = 0;                                                          // liczą się TYLKO realne kliknięcia (do PER_ACCOUNT), nie ogłoszenia bez numeru
   for (const row of queue) {
     if (clicks >= PER_ACCOUNT) break;                                      // 5 realnych prób = koniec sekwencji (anti-captcha)
-    let phone = null, lpStatus = null, lpBody = '', blank = false, clicked = false, noBtn = false;
+    let phone = null, lpStatus = null, lpBody = '', blank = false, clicked = false, noBtn = false, challengeType = '', captchaHit = false;
     const onResp = async (resp) => {
       const u = resp.url();
-      if (/friction\.olxgroup/i.test(u)) { try { const j = await resp.json(); if (j?.challenge?.type) blank = true; } catch {} }
+      if (/friction\.olxgroup/i.test(u)) { try { const j = await resp.json(); if (j?.challenge?.type) { blank = true; challengeType = j.challenge.type; } } catch {} }
       if (/limited-phones/i.test(u)) { lpStatus = resp.status(); try { lpBody = await resp.text(); const j = JSON.parse(lpBody); if (j?.data?.phones?.[0]) phone = j.data.phones[0]; } catch {} }
     };
     page.on('response', onResp);
@@ -86,11 +87,16 @@ async function revealBatch(browser, acc, state) {
           for (let w = 0; w < 13 && !phone; w++) { await sleep(600); if (/login\.olx\.pl/i.test(page.url())) { res.expired = true; break; } } // poll ~8s na odpowiedź
         }
         if (!clicked) noBtn = true;                                             // realnie brak przycisku = ogłoszenie bez numeru
+        else if (!phone && !res.expired) {                                      // klik był, numeru brak → sprawdź CAPTCHA
+          const capEl = await page.locator('iframe[src*="awswaf" i], iframe[src*="captcha" i], iframe[title*="challenge" i], [id*="captcha" i], [class*="captcha" i]').first().isVisible({ timeout: 1200 }).catch(() => false);
+          if (capEl || (challengeType && !/^blank$/i.test(challengeType))) captchaHit = true; // widoczny widget lub typ challenge ≠ blank
+        }
       }
     } catch {}
     page.off('response', onResp);
-    if (DEBUG) { const cont = await page.locator('[data-testid="phones-container"]').first().innerText().catch(() => ''); console.log(`  [dbg] ...${row.url.slice(-28)} klik:${clicked} nobtn:${noBtn} login:${/login\.olx/i.test(page.url())} blank:${blank} lp:${lpStatus || '—'} cont:"${cont.replace(/\s+/g, ' ').slice(0, 22)}" ${lpBody ? lpBody.slice(0, 45) : ''}`); }
+    if (DEBUG) { const cont = await page.locator('[data-testid="phones-container"]').first().innerText().catch(() => ''); console.log(`  [dbg] ...${row.url.slice(-28)} klik:${clicked} nobtn:${noBtn} login:${/login\.olx/i.test(page.url())} blank:${blank} chlg:${challengeType || '—'} cap:${captchaHit} lp:${lpStatus || '—'} cont:"${cont.replace(/\s+/g, ' ').slice(0, 20)}"`); }
     if (res.expired) break;
+    if (captchaHit) { res.captcha = true; console.log(`  [${acc}] 🧊 CAPTCHA (${challengeType || 'widget'}) — przerywam batch, studzę konto 45min`); break; }
     if (noBtn) { res.skipped++; await rpc('leads_mark_reveal_fail', { p_id: row.id, p_minutes: 180, p_reason: 'no_button' }).catch(() => {}); continue; } // BEZ NUMERU (nie klikaliśmy) — NIE liczy się do PER_ACCOUNT, mijamy
     clicks++;                                                              // kliknęliśmy przycisk = realna próba, liczy się do 5
     if (phone) { const norm = normPhone(phone); try { const r = await rpc('leads_ingest_offer', { p_offer: { url: row.url, portal: 'olx', portal_listing_id: suffix(row.url), property_type: row.property_type, transaction_type: row.transaction_type, phone: norm, raw: { source: 'olx-browser' } } }); console.log(`  [${acc}] ✅ ${phone} (sms:${r?.sms_status || '?'})`); res.ok++; } catch {} }
@@ -105,6 +111,7 @@ async function revealBatch(browser, acc, state) {
 if (!names.length) { accounts = await rpc('leads_get_olx_sessions').catch(() => ({})); names = Object.keys(accounts || {}); console.log(`sesje z DB: ${names.length}`); }
 if (process.env.ONLY_ACCOUNTS) { const only = new Set(process.env.ONLY_ACCOUNTS.split(',').map((s) => s.trim())); names = names.filter((n) => only.has(n)); }
 try { for (const r of (await rpc('leads_get_ip_salts').catch(() => []))) ipSalts[r.name] = r.salt; if (Object.keys(ipSalts).length) console.log('salt-override IP:', JSON.stringify(ipSalts)); } catch {} // konta z wymienionym martwym IP
+try { for (const r of (await rpc('leads_olx_cooled').catch(() => []))) cooledUntil[r.name] = new Date(r.cooled_until).getTime(); if (Object.keys(cooledUntil).length) console.log('studzone (captcha):', Object.keys(cooledUntil).join(',')); } catch {} // respektuj cooldowny po restarcie
 console.log(`konta: ${names.join(', ') || 'BRAK'} | PER_ACCOUNT=${PER_ACCOUNT} | cooldown=${COOLDOWN_MS / 60000}min | budżet=${Math.round(BUDGET_MS / 60000)}min`);
 if (!names.length) { console.log('brak sesji (OLX_SESSION/OLX_SESSIONS)'); process.exit(1); }
 const browser = await chromium.launch({ headless: false, args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'] }); // headful (przez xvfb) — headless wykrywany przez OLX
@@ -127,7 +134,8 @@ async function runAcc(acc) {
       if (expiredHits[acc] >= 2) { dead.add(acc); await slack(`:warning: *OLX konta* — sesja *${acc}* padła (2× redirect na login). Zaloguj: node login_helper.mjs ${acc}`); }
       else console.log(`[${acc}] redirect na login (${expiredHits[acc]}/2) — NIE zabijam (może proxy), ponowię`);
     }
-    console.log(`[${acc}] batch: ✅${res.ok} ∅${res.nophone}${res.skipped ? ' ⤳' + res.skipped + 'bez-num' : ''}${res.expired ? ' 🔴' : ''} | RAZEM ✅${grandOk}`);
+    if (res.captcha) { cooledUntil[acc] = Date.now() + 45 * 60000; try { await rpc('leads_olx_captcha_hit', { p_name: acc, p_minutes: 45 }); } catch {} await slack(`:snowflake: *OLX* — captcha na *${acc}* → studzę 45 min`); } // nie puszczamy w nieskończoność
+    console.log(`[${acc}] batch: ✅${res.ok} ∅${res.nophone}${res.skipped ? ' ⤳' + res.skipped + 'bez-num' : ''}${res.captcha ? ' 🧊CAPTCHA→45min' : ''}${res.expired ? ' 🔴' : ''} | RAZEM ✅${grandOk}`);
   } catch (e) { console.log(`[${acc}] błąd: ${String(e.message).slice(0, 60)}`); }
   running.delete(acc);
 }
@@ -137,7 +145,7 @@ try {
     if (names.every((n) => dead.has(n))) { console.log('wszystkie konta padły'); break; }
     if (running.size < MAX_CONCURRENT) {
       const pool = names
-        .filter((acc) => !dead.has(acc) && !running.has(acc) && Date.now() - (lastStart[acc] || 0) >= COOLDOWN_MS) // żywe, po cooldownie, nie mielone
+        .filter((acc) => !dead.has(acc) && !running.has(acc) && Date.now() - (lastStart[acc] || 0) >= COOLDOWN_MS && Date.now() >= (cooledUntil[acc] || 0)) // żywe, po cooldownie, nie mielone, nie studzone po captchy
         .sort((a, b) => (lastStart[a] || 0) - (lastStart[b] || 0))    // najdawniej ruszane pierwsze
         .slice(0, WAVE_SIZE);
       for (const acc of pool) runAcc(acc);                            // FALA: fire-and-forget → konta jadą równolegle
