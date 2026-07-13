@@ -26,7 +26,8 @@ jobs:
           node-version: "22"
       - run: npm install patchright --no-audit --no-fund
       - run: npx patchright install --with-deps chromium
-      - name: browser reveal
+      - run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: browser reveal (headful przez xvfb)
         env:
           OLX_SESSION: ${{ secrets.OLX_SESSION }}
           OLX_SESSIONS: ${{ secrets.OLX_SESSIONS }}
@@ -37,4 +38,4 @@ jobs:
           COOLDOWN_MIN: ${{ github.event.inputs.cooldown_min || '8' }}
           BUDGET_MIN: ${{ github.event.inputs.budget_min || '300' }}
           DEBUG: "1"
-        run: node browser_revealer.mjs
+        run: xvfb-run -a node browser_revealer.mjs
