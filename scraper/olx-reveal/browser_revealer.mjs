@@ -88,7 +88,7 @@ async function revealBatch(browser, acc, state) {
     if (DEBUG) { const cont = await page.locator('[data-testid="phones-container"]').first().innerText().catch(() => ''); console.log(`  [dbg] ...${row.url.slice(-28)} klik:${clicked} nobtn:${noBtn} login:${/login\.olx/i.test(page.url())} blank:${blank} lp:${lpStatus || '—'} cont:"${cont.replace(/\s+/g, ' ').slice(0, 22)}" ${lpBody ? lpBody.slice(0, 45) : ''}`); }
     if (res.expired) break;
     if (phone) { const norm = normPhone(phone); try { const r = await rpc('leads_ingest_offer', { p_offer: { url: row.url, portal: 'olx', portal_listing_id: suffix(row.url), property_type: row.property_type, transaction_type: row.transaction_type, phone: norm, raw: { source: 'olx-browser' } } }); console.log(`  [${acc}] ✅ ${phone} (sms:${r?.sms_status || '?'})`); res.ok++; } catch {} }
-    else { res.nophone++; await rpc('leads_defer_reveal', { p_id: row.id, p_minutes: 30 }).catch(() => {}); }
+    else { res.nophone++; await rpc('leads_mark_reveal_fail', { p_id: row.id, p_minutes: noBtn ? 180 : 30, p_reason: noBtn ? 'no_button' : 'no_reveal' }).catch(() => {}); } // +1 próba, powód, odroczenie (brak przycisku = dłużej, zwykle stałe)
     await sleep(2500 + Math.random() * 2500);
   }
   await ctx.close().catch(() => {});
