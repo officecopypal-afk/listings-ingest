@@ -37,6 +37,7 @@ async function proxyKeyFor(acc) {
   const key = keyFor(acc);
   const ip = await ipVia(key).catch(() => null);
   console.log(`  [${acc}] 🌐 stały IP: ${ip || '(nie sprawdzono)'} — ten sam co zawsze, trzymam ${LIFETIME}`);
+  if (ip) { try { await rpc('leads_olx_ip_seen', { p_name: acc, p_ip: ip }); } catch {} } // zapis do śledzenia zmian IP
   return key;
 }
 
