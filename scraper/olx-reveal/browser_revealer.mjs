@@ -34,9 +34,14 @@ async function revealBatch(browser, acc, state) {
   const ctx = await browser.newContext({ proxy: proxyFor(acc), storageState: state, locale: 'pl-PL', timezoneId: 'Europe/Warsaw', viewport: { width: 1366, height: 900 }, userAgent: UA });
   const page = await ctx.newPage();
   await page.route('**/*', (r) => (['image', 'media', 'font'].includes(r.request().resourceType()) ? r.abort() : r.continue()));
+  const DEBUG = process.env.DEBUG === '1';
   for (const row of queue) {
-    let phone = null;
-    const onResp = async (resp) => { if (/limited-phones/i.test(resp.url())) { try { const j = await resp.json(); if (j?.data?.phones?.[0]) phone = j.data.phones[0]; } catch {} } };
+    let phone = null, lpStatus = null, lpBody = '', blank = false, clicked = false;
+    const onResp = async (resp) => {
+      const u = resp.url();
+      if (/friction\.olxgroup/i.test(u)) { try { const j = await resp.json(); if (j?.challenge?.type) blank = true; } catch {} }
+      if (/limited-phones/i.test(u)) { lpStatus = resp.status(); try { lpBody = await resp.text(); const j = JSON.parse(lpBody); if (j?.data?.phones?.[0]) phone = j.data.phones[0]; } catch {} }
+    };
     page.on('response', onResp);
     try {
       await page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: 40000 });
@@ -44,12 +49,13 @@ async function revealBatch(browser, acc, state) {
       if (/login\.olx\.pl/i.test(page.url())) res.expired = true;
       else {
         const btns = page.locator('[data-testid="show-phone"]'); const n = await btns.count();
-        for (let i = 0; i < n; i++) { const b = btns.nth(i); if (await b.isVisible().catch(() => false)) { await b.scrollIntoViewIfNeeded().catch(() => {}); await b.click({ timeout: 3000 }).catch(() => {}); break; } }
+        for (let i = 0; i < n; i++) { const b = btns.nth(i); if (await b.isVisible().catch(() => false)) { await b.scrollIntoViewIfNeeded().catch(() => {}); await b.click({ timeout: 3000 }).catch(() => {}); clicked = true; break; } }
         await sleep(4500);
         if (/login\.olx\.pl/i.test(page.url())) res.expired = true;
       }
     } catch {}
     page.off('response', onResp);
+    if (DEBUG) { const cont = await page.locator('[data-testid="phones-container"]').first().innerText().catch(() => ''); console.log(`  [dbg] ...${row.url.slice(-28)} klik:${clicked} login:${/login\.olx/i.test(page.url())} blank:${blank} lp:${lpStatus || '—'} cont:"${cont.replace(/\s+/g, ' ').slice(0, 22)}" ${lpBody ? lpBody.slice(0, 45) : ''}`); }
     if (res.expired) break;
     if (phone) { const norm = normPhone(phone); try { const r = await rpc('leads_ingest_offer', { p_offer: { url: row.url, portal: 'olx', portal_listing_id: suffix(row.url), property_type: row.property_type, transaction_type: row.transaction_type, phone: norm, raw: { source: 'olx-browser' } } }); console.log(`  [${acc}] ✅ ${phone} (sms:${r?.sms_status || '?'})`); res.ok++; } catch {} }
     else { res.nophone++; await rpc('leads_defer_reveal', { p_id: row.id, p_minutes: 30 }).catch(() => {}); }

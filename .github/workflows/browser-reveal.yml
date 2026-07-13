@@ -36,4 +36,5 @@ jobs:
           PER_ACCOUNT: ${{ github.event.inputs.per_account || '5' }}
           COOLDOWN_MIN: ${{ github.event.inputs.cooldown_min || '8' }}
           BUDGET_MIN: ${{ github.event.inputs.budget_min || '300' }}
+          DEBUG: "1"
         run: node browser_revealer.mjs
