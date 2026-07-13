@@ -49,18 +49,20 @@ try {
     .map(e => ({ tag: e.tagName, txt: (e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40), testid: e.getAttribute('data-testid') || e.getAttribute('data-cy') || '' })).slice(0, 8));
   console.log('  kandydaci na przycisk numeru:', JSON.stringify(candidates));
 
-  // spróbuj kliknąć najlepszego
+  // klik "Pokaż" (data-testid=show-phone) — może być kilka, kliknij WIDOCZNY
   let clicked = false;
-  for (const sel of ['[data-testid="show-phone"]', '[data-cy="ad-contact-phone"]', 'button:has-text("Pokaż numer")', 'button:has-text("numer")', 'a:has-text("Pokaż numer")']) {
-    try { const b = page.locator(sel).first(); if (await b.isVisible({ timeout: 1500 })) { await b.click({ timeout: 3000 }); console.log('  KLIKNIĘTO:', sel); clicked = true; break; } } catch {}
+  const btns = page.locator('[data-testid="show-phone"]');
+  const nb = await btns.count();
+  console.log('  przycisków show-phone:', nb);
+  for (let i = 0; i < nb; i++) {
+    try { const b = btns.nth(i); await b.scrollIntoViewIfNeeded({ timeout: 2000 }); if (await b.isVisible()) { await b.click({ timeout: 3000 }); console.log('  KLIKNIĘTO show-phone #' + i); clicked = true; break; } } catch (e) { console.log('  klik #' + i + ' err:', e.message.slice(0, 40)); }
   }
-  if (!clicked) console.log('  ⚠️ nie znalazłem przycisku do kliknięcia (patrz kandydaci wyżej)');
+  if (!clicked) console.log('  ⚠️ nie kliknąłem żadnego widocznego show-phone');
 
-  await sleep(6000); // daj przeglądarce rozwiązać challenge + zrobić request
+  await sleep(8000); // daj przeglądarce rozwiązać challenge + zrobić request
 
-  // odczytaj numer z DOM też (fallback)
-  const domPhone = await page.evaluate(() => { const m = (document.body.innerText || '').match(/(?:\+?48[\s-]?)?(?:\d[\s-]?){8}\d/g); return m ? m.filter(x => x.replace(/\D/g, '').length >= 9).slice(0, 3) : []; }).catch(() => []);
+  const containerTxt = await page.locator('[data-testid="phones-container"]').first().innerText().catch(() => '');
   console.log('\n=== WYNIK ===');
   console.log('  limited-phones:', phoneResult ? `HTTP ${phoneResult.status} ${phoneResult.body}` : 'BRAK (nie zrobił requestu / challenge nie przeszło)');
-  console.log('  numer w DOM:', domPhone.length ? domPhone.join(', ') : 'brak');
+  console.log('  phones-container po kliknięciu:', containerTxt.replace(/\s+/g, ' ').slice(0, 60) || 'pusto');
 } catch (e) { console.log('BŁĄD:', e.message.slice(0, 150)); } finally { await browser.close(); }
