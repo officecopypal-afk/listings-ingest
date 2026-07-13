@@ -37,5 +37,15 @@ if (!logged) { console.log(`[${ACC}] nie wykryłem zalogowania — zamykam (spr�
 const state = await ctx.storageState();
 fs.writeFileSync(`session_${ACC}.json`, JSON.stringify(state));
 console.log(`✅ [${ACC}] ZALOGOWANY — sesja zapisana (session_${ACC}.json, ${state.cookies.length} cookies).`);
+// wgraj też do DB (leads.olx_sessions) — żeby konto od razu weszło do rotacji reveala i panelu Audyteko
+try {
+  const env = fs.readFileSync(`${process.env.HOME}/Desktop/Audyteko/.env.local`, 'utf8');
+  const get = (k) => (env.match(new RegExp(`^${k}=(.+)$`, 'm')) || [])[1]?.trim().replace(/^["']|["']$/g, '');
+  const URL = get('NEXT_PUBLIC_SUPABASE_URL') || get('SUPABASE_URL'), KEY = get('SUPABASE_SERVICE_ROLE_KEY');
+  if (URL && KEY) {
+    const r = await fetch(`${URL}/rest/v1/rpc/leads_upsert_olx_session`, { method: 'POST', headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ p_name: ACC, p_state: state }) });
+    console.log(r.ok ? `✅ [${ACC}] sesja wgrana do DB (rotacja + panel)` : `⚠️ [${ACC}] DB upload HTTP ${r.status}`);
+  }
+} catch (e) { console.log(`⚠️ [${ACC}] DB upload pominięty: ${String(e.message).slice(0, 60)}`); }
 await ctx.close();
 process.exit(0);
