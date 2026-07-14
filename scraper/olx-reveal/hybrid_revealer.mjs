@@ -22,6 +22,9 @@ const LIFETIME = process.env.PROXY_LIFETIME || '24h';
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
 const DEBUG = process.env.DEBUG === '1';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Blokuj reklamy/tracking na capture (przeglądarka) — inaczej pełne strony żrą GB. HTTP reveale i tak omijają przeglądarkę.
+const BLOCK_HOST = /doubleclick|googlesyndication|google-analytics|googletagmanager|googleadservices|adservice\.google|facebook\.net|facebook\.com|criteo|rubiconproject|pubmatic|casalemedia|adnxs|amazon-adsystem|openx|indexww|3lift|triplelift|sharethrough|taboola|outbrain|teads|tapad|stackadapt|seedtag|betweendigital|adition|richaudience|yieldmo|aniview|omnitagjs|blismedia|contextweb|scorecardresearch|adsrvr|adform|smartadserver|bidswitch|360yield|gumgum|media\.net|onetag|browsi|id5-sync|crwdcntrl|demdex|bluekai|rlcdn|agkn|adroll|quantserve|hotjar|clarity\.ms|permutive|yieldlab|improvedigital|smartclip|omtrdc|newrelic|sentry|segment\.|mixpanel|amplitude|appsflyer|adjust\.com|kochava|olx-st\.com|ninja\.data\.olxcdn|seedtag|onthe\.io/i;
+const routeBlock = (r) => { const rt = r.request().resourceType(); if (rt === 'image' || rt === 'media' || rt === 'font' || rt === 'stylesheet') return r.abort(); let host = ''; try { host = new URL(r.request().url()).hostname; } catch {} if (host && BLOCK_HOST.test(host)) return r.abort(); return r.continue(); };
 
 const B62 = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const decode62 = (s) => { let n = 0n; for (const c of s) { const i = B62.indexOf(c); if (i < 0) return null; n = n * 62n + BigInt(i); } return n.toString(); };
@@ -47,9 +50,15 @@ async function captureHeaders(browser, acc, state) {
   if (!NO_PROXY) ctxOpts.proxy = proxyForKey(key);
   const ctx = await browser.newContext(ctxOpts);
   const page = await ctx.newPage();
-  await page.route('**/*', (r) => (['image', 'media', 'font'].includes(r.request().resourceType()) ? r.abort() : r.continue()));
+  await page.route('**/*', routeBlock); // ad-block — capture nie ładuje reklam/trackingu (główny żłop GB)
   const hdr = {}; let uuid = null;
-  page.on('request', (req) => { const u = req.url(), h = req.headers(); if (/friction\.olxgroup\.com\/challenge/i.test(u)) { try { uuid = JSON.parse(req.postData() || '{}')?.actor?.username; } catch {} if (h['x-user-tests']) hdr['x-user-tests'] = h['x-user-tests']; } if (/limited-phones/i.test(u)) for (const k of ['authorization', 'x-client', 'x-device-id', 'x-fingerprint', 'x-platform-type', 'cookie']) if (h[k]) hdr[k] = h[k]; });
+  page.on('request', (req) => {
+    const u = req.url(), h = req.headers();
+    for (const k of ['authorization', 'x-client', 'x-device-id', 'x-fingerprint', 'x-platform-type', 'x-user-tests']) if (h[k] && !hdr[k]) hdr[k] = h[k]; // łap z DOWOLNEGO requesta (też warm-up)
+    let host = ''; try { host = new URL(u).hostname; } catch {}
+    if (/(^|\.)olx\.pl$/i.test(host) && h['cookie'] && !hdr['cookie']) hdr['cookie'] = h['cookie'];
+    if (/friction\.olxgroup\.com\/challenge/i.test(u)) { try { const b = JSON.parse(req.postData() || '{}'); if (b?.actor?.username) uuid = b.actor.username; } catch {} }
+  });
   let firstPhone = null, firstUrl = null;
   page.on('response', async (resp) => { if (/limited-phones/i.test(resp.url())) { try { const j = JSON.parse(await resp.text()); if (j?.data?.phones?.[0]) firstPhone = j.data.phones[0]; } catch {} } });
 
@@ -59,19 +68,23 @@ async function captureHeaders(browser, acc, state) {
   try { await rpc('leads_upsert_olx_session', { p_name: acc, p_state: await ctx.storageState() }); } catch {} // ZAWSZE zapisz odświeżony token
   if (!loggedIn) { await ctx.close().catch(() => {}); return { loggedIn: false }; }
 
-  // 1 realny reveal żeby złapać komplet nagłówków (klikamy pierwszy klikalny z queue)
-  const q = await rpc('leads_claim_reveal_queue', { p_portal: 'olx', p_limit: 6 }).catch(() => []);
-  for (const row of (q || [])) {
-    await page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: 40000 }).catch(() => {});
-    await sleep(4000);
-    if (/login\.olx\.pl/i.test(page.url())) { await ctx.close().catch(() => {}); return { loggedIn: false }; }
-    const btns = page.locator('[data-testid="show-phone"]'); const n = await btns.count();
-    let clicked = false;
-    for (let j = 0; j < n; j++) { const b = btns.nth(j); if (await b.isVisible().catch(() => false)) { await b.click({ timeout: 3000 }).catch(() => {}); clicked = true; break; } }
-    await sleep(6000);
-    if (firstPhone && uuid && hdr['x-fingerprint']) { firstUrl = row.url; break; }
-    if (!clicked) continue; // brak przycisku — próbuj kolejne
+  // jeśli WARM-UP już dał komplet nagłówków — NIE ładuj żadnej strony ogłoszenia (max oszczędność)
+  const complete = () => hdr['x-fingerprint'] && hdr['authorization'] && hdr['x-device-id'] && hdr['x-user-tests'] && hdr['cookie'] && uuid;
+  if (!complete()) {
+    const q = await rpc('leads_claim_reveal_queue', { p_portal: 'olx', p_limit: 3 }).catch(() => []);
+    let tries = 0;
+    for (const row of (q || [])) {
+      if (tries++ >= 2 || complete()) break;                       // MAX 2 strony na capture
+      await page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+      await sleep(4000);
+      if (/login\.olx\.pl/i.test(page.url())) { await ctx.close().catch(() => {}); return { loggedIn: false }; }
+      const btns = page.locator('[data-testid="show-phone"]'); const n = await btns.count();
+      for (let j = 0; j < n; j++) { const b = btns.nth(j); if (await b.isVisible().catch(() => false)) { await b.click({ timeout: 3000 }).catch(() => {}); break; } }
+      await sleep(6000);
+      if (firstPhone) firstUrl = row.url;
+    }
   }
+  console.log(`  [${acc}] capture: nagłówki=${Object.keys(hdr).length}/6 uuid=${uuid ? 'T' : 'N'} ${firstPhone ? '(numer z warm-up/reveala)' : '(sam warm-up)'}`);
   const ipUsed = hdr['x-fingerprint'] ? await ipVia(key).catch(() => null) : null;
   await ctx.close().catch(() => {});
   return { loggedIn: true, hdr, uuid, firstPhone, firstUrl, ipUsed };
