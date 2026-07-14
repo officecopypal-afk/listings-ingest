@@ -20,7 +20,8 @@ const COOLDOWN_MS = Number(process.env.COOLDOWN_MIN || 8) * 60000;
 const BUDGET_MS = Number(process.env.BUDGET_MIN || 300) * 60000; // minuty → ms
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
 const DEBUG = process.env.DEBUG === '1';
-const ALLOW_HOSTS = ['olx.pl', 'olxcdn.com', 'olxgroup.com', 'awswaf.com', 'amazonaws.com']; // TYLKO te domeny ładujemy przez proxy — reszta (reklamy/tracking, dziesiątki sieci) = główny żłop GB, blokowana
+// Blokujemy TYLKO znane reklamy/tracking/analytics (główny żłop GB) — całe OLX i funkcjonalne zasoby przechodzą (rendering nietknięty).
+const BLOCK_HOST = /doubleclick|googlesyndication|google-analytics|googletagmanager|googleadservices|adservice\.google|facebook\.net|connect\.facebook|criteo|rubiconproject|pubmatic|casalemedia|adnxs|amazon-adsystem|openx|indexww|3lift|triplelift|sharethrough|taboola|outbrain|teads|tapad|stackadapt|seedtag|betweendigital|adition|richaudience|yieldmo|aniview|omnitagjs|blismedia|contextweb|scorecardresearch|adsrvr|adform|smartadserver|bidswitch|360yield|gumgum|media\.net|onetag|browsi|id5-sync|crwdcntrl|demdex|bluekai|rlcdn|agkn|adroll|quantserve|hotjar|clarity\.ms|permutive|yieldlab|improvedigital|smartclip|omtrdc|newrelic|sentry|segment\.|mixpanel|amplitude|appsflyer|adjust\.com|kochava|olx-st\.com|ninja\.data\.olxcdn/i;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const suffix = (u) => { const m = u.match(/-ID([0-9A-Za-z]+)\.html/i); return m ? m[1] : null; };
 const normPhone = (s) => { const d = String(s).replace(/\D/g, ''); if (d.length === 9) return '+48' + d; if (d.length === 11 && d.startsWith('48')) return '+' + d; return d.length >= 9 ? '+48' + d.slice(-9) : null; };
@@ -55,9 +56,9 @@ async function revealBatch(browser, acc, state) {
   const page = await ctx.newPage();
   await page.route('**/*', (r) => {
     const rt = r.request().resourceType();
-    if (rt === 'image' || rt === 'media' || rt === 'font') return r.abort();                    // ciężkie, niepotrzebne do reveala
+    if (rt === 'image' || rt === 'media' || rt === 'font') return r.abort();     // ciężkie, niepotrzebne do reveala
     let host = ''; try { host = new URL(r.request().url()).hostname; } catch {}
-    if (host && !ALLOW_HOSTS.some((d) => host === d || host.endsWith('.' + d))) return r.abort(); // wszystko poza OLX (reklamy/tracking) — blok, oszczędność GB
+    if (host && BLOCK_HOST.test(host)) return r.abort();                          // znane reklamy/tracking = żłop GB (całe OLX przechodzi → rendering OK)
     return r.continue();
   });
   if (DEBUG) page.on('console', (m) => { if (m.type() === 'error' && !/ERR_FAILED|net::|status of 4|status of 5/i.test(m.text())) console.log('  [con.err]', m.text().slice(0, 85)); });
