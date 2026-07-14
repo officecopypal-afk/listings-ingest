@@ -1,0 +1,49 @@
+name: OLX MOBILE reveal
+# Silnik mobilny: czysty HTTP przez residential proxy (per konto), bez przeglądarki/captchy.
+# Ciągłość = self-chain; backstop = cron godzinny; DEDUP = lock w Supabase (tylko 1 run pracuje, reszta wychodzi w sekundę).
+on:
+  schedule:
+    - cron: "5 * * * *"    # backstop (crash-recovery) — główna ciągłość to łańcuch na końcu runu
+  workflow_dispatch:
+    inputs:
+      per_account:
+        description: "Reveali/konto na cykl"
+        default: "25"
+      pause_min:
+        description: "Pauza po sekwencji (min)"
+        default: "7"
+      budget_min:
+        description: "Budżet minut runu (potem self-chain)"
+        default: "330"
+permissions:
+  actions: write   # do samo-wywołania następnego runu (łańcuch)
+  contents: read
+jobs:
+  reveal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    defaults:
+      run:
+        working-directory: scraper/olx-mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install undici --no-audit --no-fund
+      - name: mobile reveal engine
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PROXY_USER: ${{ secrets.PROXY_USER }}
+          PROXY_PASS: ${{ secrets.PROXY_PASS }}
+          PROXY_PORT: ${{ secrets.PROXY_PORT }}
+          PER_ACCOUNT: ${{ github.event.inputs.per_account || '25' }}
+          PAUSE_MIN: ${{ github.event.inputs.pause_min || '7' }}
+          BUDGET_MIN: ${{ github.event.inputs.budget_min || '330' }}
+        run: node mobile_engine.mjs
+      - name: łańcuch — następny run (ciągłość bez luki)
+        if: ${{ success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run "OLX MOBILE reveal" --ref "${{ github.ref_name }}"
