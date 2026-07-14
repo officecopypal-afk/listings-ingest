@@ -77,8 +77,8 @@ async function runAccount(a) {
     const adId = adIdFromUrl(row.url); if (!adId) continue;
     let res; try { res = await reveal(a, adId); } catch { s.err++; await sleep(DELAY_MS); continue; }
     if (res.kind === 'ok') { s.ok++; wallStreak = 0; try { const ing = await rpc('leads_ingest_offer', { p_offer: { url: row.url, portal: 'olx', portal_listing_id: adId, property_type: row.property_type, transaction_type: row.transaction_type, phone: normPhone(res.phone), raw: { source: 'olx-mobile', acct: a.label } } }); if (ing?.sms_status === 'queued') s.queued++; } catch {} }
-    else if (res.kind === 'empty') s.empty++;
-    else if (res.kind === 'gone') s.gone++;
+    else if (res.kind === 'empty') { s.empty++; await rpc('leads_mark_reveal_fail', { p_id: row.id, p_minutes: 180, p_reason: 'no_phone' }).catch(() => {}); } // odłóż 3h, po 5 próbach wypada
+    else if (res.kind === 'gone') { s.gone++; await rpc('leads_mark_reveal', { p_id: row.id, p_status: 'inactive' }).catch(() => {}); } // usunięte ogłoszenie → precz z kolejki
     else if (res.kind === 'wall') { s.wall++; if (++wallStreak >= 3) { await rpc('leads_set_mobile_status', { p_label: a.label, p_status: 'wall' }).catch(() => {}); await slack(`🟡 OLX mobile: konto ${a.label} trafiło ścianę ${res.status} (3×) — przerywam konto na ten cykl`); break; } }
     else s.err++;
     await sleep(DELAY_MS);
