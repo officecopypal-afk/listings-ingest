@@ -19,7 +19,16 @@ try {
   const logged = await page.evaluate(() => Object.keys(localStorage).some((k) => /auth0spajs.*@@user@@/i.test(k))).catch(() => false);
   const ns = await ctx.storageState();
   const after = expOf(ns);
-  if (logged) { fs.writeFileSync(F, JSON.stringify(ns)); }
+  if (logged) {
+    fs.writeFileSync(F, JSON.stringify(ns));
+    // sync do DB (leads.olx_sessions) — żeby baza była świeża, nie tylko lokalny plik (revealer czyta z DB)
+    try {
+      const env = fs.readFileSync(`${process.env.HOME}/Desktop/Audyteko/.env.local`, 'utf8');
+      const get = (k) => (env.match(new RegExp(`^${k}=(.+)$`, 'm')) || [])[1]?.trim().replace(/^["']|["']$/g, '');
+      const U = get('NEXT_PUBLIC_SUPABASE_URL') || get('SUPABASE_URL'), K = get('SUPABASE_SERVICE_ROLE_KEY');
+      if (U && K) await fetch(`${U}/rest/v1/rpc/leads_upsert_olx_session`, { method: 'POST', headers: { apikey: K, Authorization: `Bearer ${K}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ p_name: ACC, p_state: ns }) });
+    } catch {}
+  }
   const now = Math.floor(Date.now() / 1000);
   console.log(`[${ACC}] zalogowany=${logged} | exp przed=${before ? Math.round((before - now) / 60) + 'min' : '?'} → po=${after ? Math.round((after - now) / 60) + 'min' : '?'} | ${after > before ? '✅ ODŚWIEŻONE' : (logged ? 'bez zmiany' : '🔴 SESJA PADŁA')}`);
   await ctx.close();
