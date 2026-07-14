@@ -28,7 +28,7 @@ for (const acc of names) {
   const now = Math.floor(Date.now() / 1000);
   const before = expOf(state);
   try {
-    const ctx = await browser.newContext({ proxy: proxyForKey(keyFor(acc, salts[acc] || 0)), storageState: state, locale: 'pl-PL', timezoneId: 'Europe/Warsaw', viewport: { width: 1366, height: 900 } });
+    const ctx = await browser.newContext({ storageState: state, locale: 'pl-PL', timezoneId: 'Europe/Warsaw', viewport: { width: 1366, height: 900 } }); // BEZ proxy — odświeżenie tokena jest IP-agnostyczne, proxy w headless psuło refresh
     const page = await ctx.newPage();
     await page.goto('https://www.olx.pl/', { waitUntil: 'domcontentloaded', timeout: 40000 }).catch(() => {});
     await sleep(9000); // SDK odnawia token
