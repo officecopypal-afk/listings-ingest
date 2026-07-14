@@ -1,0 +1,42 @@
+name: OLX HYBRID reveal
+# Hybryda: przeglądarka łapie nagłówki raz/sesję, reveale = CZYSTE HTTP (grosze transferu). Fale, cooldown 8min, captcha→45min.
+on:
+  workflow_dispatch:
+    inputs:
+      only_accounts:
+        description: "Konta, np. konto3,konto5 (puste = wszystkie z DB)"
+        default: ""
+      per_account:
+        description: "Reveali/konto na cykl"
+        default: "5"
+      budget_min:
+        description: "Budżet minut (test: 4, prod: 720)"
+        default: "720"
+concurrency:
+  group: olx-hybrid-reveal
+  cancel-in-progress: false
+jobs:
+  reveal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 730
+    defaults:
+      run:
+        working-directory: scraper/olx-reveal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install patchright undici --no-audit --no-fund
+      - run: npx patchright install --with-deps chromium
+      - run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: hybrid reveal (headful przez xvfb)
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PER_ACCOUNT: ${{ github.event.inputs.per_account || '5' }}
+          BUDGET_MIN: ${{ github.event.inputs.budget_min || '720' }}
+          ONLY_ACCOUNTS: ${{ github.event.inputs.only_accounts || '' }}
+          DEBUG: "1"
+        run: xvfb-run -a node hybrid_revealer.mjs
