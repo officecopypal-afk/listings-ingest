@@ -146,7 +146,10 @@ const start = Date.now(); let grandOk = 0;
 async function runAcc(acc) {
   running.add(acc); lastStart[acc] = Date.now();
   try {
-    const res = await revealBatch(browser, acc, accounts[acc]);
+    const res = await Promise.race([
+      revealBatch(browser, acc, accounts[acc]),
+      sleep(150000).then(() => { throw new Error('batch timeout 150s — proxy zamula, zwalniam konto'); }),
+    ]);
     grandOk += res.ok;
     if (res.ok > 0 || res.loggedIn) expiredHits[acc] = 0;
     if (!res.loggedIn) { cooledUntil[acc] = Date.now() + 25 * 60000; await slack(`:door: *OLX hybrid* — *${acc}* wylogowane, pauza 25min`); }
