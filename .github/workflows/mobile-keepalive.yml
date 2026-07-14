@@ -1,0 +1,27 @@
+name: OLX MOBILE keep-alive
+# Trzyma konta ŻYWE bez skanowania — tylko odświeża tokeny 2×/dobę (zero reveali, zero ryzyka limitu).
+on:
+  schedule:
+    - cron: "0 6,18 * * *"    # 2×/dobę (06:00 i 18:00 UTC) — lekkie, ~30s
+  workflow_dispatch:
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: scraper/olx-mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install undici --no-audit --no-fund
+      - name: keep-alive tokenów
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PROXY_USER: ${{ secrets.PROXY_USER }}
+          PROXY_PASS: ${{ secrets.PROXY_PASS }}
+          PROXY_PORT: ${{ secrets.PROXY_PORT }}
+        run: node mobile_keepalive.mjs
