@@ -59,7 +59,8 @@ async function revealBatch(browser, acc, state) {
   await sleep(7000);
   res.loggedIn = await page.locator('[data-testid="my-account-menu"], [data-testid="header-user-menu"], a[href*="/mojolx"], a[href*="/konto"]').first().isVisible({ timeout: 2500 }).catch(() => false);
   console.log(`  [${acc}] rozgrzewka: zalogowany=${res.loggedIn}`);
-  if (res.loggedIn) { try { await rpc('leads_upsert_olx_session', { p_name: acc, p_state: await ctx.storageState() }); } catch {} } // zapisz odświeżone tokeny do DB
+  try { await rpc('leads_upsert_olx_session', { p_name: acc, p_state: await ctx.storageState() }); } catch {} // ZAWSZE zapisz (świeży refresh token → nie zwietrzeje, to był gwóźdź wczoraj)
+  if (!res.loggedIn) { console.log(`  [${acc}] 🚪 WYLOGOWANY — nie reweluję (cron-odświeżacz to naprawi)`); await ctx.close().catch(() => {}); return res; } // NIE walić na wylogowanej sesji
   let clicks = 0;                                                          // liczą się TYLKO realne kliknięcia (do PER_ACCOUNT), nie ogłoszenia bez numeru
   for (const row of queue) {
     if (clicks >= PER_ACCOUNT) break;                                      // 5 realnych prób = koniec sekwencji (anti-captcha)
@@ -135,7 +136,8 @@ async function runAcc(acc) {
       else console.log(`[${acc}] redirect na login (${expiredHits[acc]}/2) — NIE zabijam (może proxy), ponowię`);
     }
     if (res.captcha) { cooledUntil[acc] = Date.now() + 45 * 60000; try { await rpc('leads_olx_captcha_hit', { p_name: acc, p_minutes: 45 }); } catch {} await slack(`:snowflake: *OLX* — captcha na *${acc}* → studzę 45 min`); } // nie puszczamy w nieskończoność
-    console.log(`[${acc}] batch: ✅${res.ok} ∅${res.nophone}${res.skipped ? ' ⤳' + res.skipped + 'bez-num' : ''}${res.captcha ? ' 🧊CAPTCHA→45min' : ''}${res.expired ? ' 🔴' : ''} | RAZEM ✅${grandOk}`);
+    if (res.fetched > 0 && !res.loggedIn && !res.expired) { cooledUntil[acc] = Date.now() + 25 * 60000; await slack(`:door: *OLX* — *${acc}* wylogowane, pomijam (cron odświeży). Pauza 25min`); } // nie walić na wylogowanej sesji
+    console.log(`[${acc}] batch: ${!res.loggedIn && res.fetched > 0 ? '🚪wylogowany' : '✅' + res.ok + ' ∅' + res.nophone + (res.skipped ? ' ⤳' + res.skipped + 'bez-num' : '') + (res.captcha ? ' 🧊CAPTCHA→45min' : '') + (res.expired ? ' 🔴' : '')} | RAZEM ✅${grandOk}`);
   } catch (e) { console.log(`[${acc}] błąd: ${String(e.message).slice(0, 60)}`); }
   running.delete(acc);
 }

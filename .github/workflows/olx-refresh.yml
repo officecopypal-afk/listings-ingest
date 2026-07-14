@@ -1,0 +1,34 @@
+name: OLX refresh sesji (cron)
+# Odświeża tokeny wszystkich sesji w DB co 20 min (token żyje ~1h) → konta się nie wylogowują.
+# Niezależny od Maca i od runu reveala. Headless (samo odświeżenie nie wymaga headful). Zapisuje świeże tokeny do DB.
+on:
+  schedule:
+    - cron: "*/20 * * * *"
+  workflow_dispatch:
+    inputs:
+      accounts:
+        description: "Konta oddzielone spacją (puste = wszystkie z DB)"
+        default: ""
+concurrency:
+  group: olx-refresh
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: scraper/olx-reveal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install patchright undici --no-audit --no-fund
+      - run: npx patchright install --with-deps chromium
+      - name: refresh sesji
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node refresh_db_sessions.mjs ${{ github.event.inputs.accounts }}
