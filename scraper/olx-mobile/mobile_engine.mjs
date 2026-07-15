@@ -33,12 +33,15 @@ const decode62 = (s) => { let n = 0n; for (const c of s) { const i = B62.indexOf
 const adIdFromUrl = (u) => { const m = u.match(/-ID([0-9A-Za-z]+)\.html/i); return m ? decode62(m[1]) : null; };
 const normPhone = (s) => { const d = String(s).replace(/\D/g, ''); if (d.length === 9) return '+48' + d; if (d.length === 11 && d.startsWith('48')) return '+' + d; return d.length >= 9 ? '+48' + d.slice(-9) : null; };
 
-const ptoken = 'Basic ' + Buffer.from(`${PROXY_USER}:${PROXY_PASS}`).toString('base64');
-const agentFor = (ip) => new ProxyAgent({ uri: `http://${ip}:${PROXY_PORT}`, token: ptoken });
+// proxy PER KONTO (irlandzkie/polskie) z wiersza tokena; fallback do env
+const agentFor = (r) => {
+  const u = r.proxy_user || PROXY_USER, p = r.proxy_pass || PROXY_PASS, port = r.proxy_port || PROXY_PORT;
+  return new ProxyAgent({ uri: `http://${r.ip}:${port}`, token: 'Basic ' + Buffer.from(`${u}:${p}`).toString('base64') });
+};
 
 async function loadAccounts() {
   const rows = await rpc('leads_get_mobile_tokens', {});
-  return (rows || []).filter((r) => r.status !== 'dead').map((r) => ({ label: r.label, ip: r.ip, email: r.email, refresh_token: r.refresh_token, agent: agentFor(r.ip), access: null, accessExp: 0, deviceId: crypto.createHash('sha1').update('dev:' + r.label).digest('hex'), dead: false, netFails: 0, alertedProxy: false }));
+  return (rows || []).filter((r) => r.status !== 'dead').map((r) => ({ label: r.label, ip: r.ip, email: r.email, refresh_token: r.refresh_token, agent: agentFor(r), access: null, accessExp: 0, deviceId: crypto.createHash('sha1').update('dev:' + r.label).digest('hex'), dead: false, netFails: 0, alertedProxy: false }));
 }
 
 async function refresh(a) {

@@ -17,14 +17,17 @@ const PROXY_PORT = (process.env.PROXY_PORT || '12323').trim();
 async function rpc(fn, body) { const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }); const t = await r.text(); if (!r.ok) throw new Error(`${fn} ${r.status}`); return t ? JSON.parse(t) : null; }
 async function slack(text) { try { await fetch(`${SB_URL}/functions/v1/scraper-alert`, { method: 'POST', headers: { authorization: `Bearer ${SB_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ text }) }); } catch {} }
 
-const ptoken = 'Basic ' + Buffer.from(`${PROXY_USER}:${PROXY_PASS}`).toString('base64');
-const agentFor = (ip) => new ProxyAgent({ uri: `http://${ip}:${PROXY_PORT}`, token: ptoken });
+// proxy PER KONTO (irlandzkie/polskie) z wiersza tokena; fallback do env
+const agentFor = (a) => {
+  const u = a.proxy_user || PROXY_USER, p = a.proxy_pass || PROXY_PASS, port = a.proxy_port || PROXY_PORT;
+  return new ProxyAgent({ uri: `http://${a.ip}:${port}`, token: 'Basic ' + Buffer.from(`${u}:${p}`).toString('base64') });
+};
 
 const rows = await rpc('leads_get_mobile_tokens', {});
 let ok = 0, dead = 0, neterr = 0;
 for (const a of rows || []) {
   try {
-    const r = await fetch('https://login.olx.pl/oauth2/token', { method: 'POST', dispatcher: agentFor(a.ip), headers: { 'content-type': 'application/json', 'user-agent': 'OLX.pl/883 CFNetwork/3860.600.12 Darwin/25.5.0', accept: '*/*' }, body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: a.refresh_token, client_id: CLIENT_ID }), signal: AbortSignal.timeout(25000) });
+    const r = await fetch('https://login.olx.pl/oauth2/token', { method: 'POST', dispatcher: agentFor(a), headers: { 'content-type': 'application/json', 'user-agent': 'OLX.pl/883 CFNetwork/3860.600.12 Darwin/25.5.0', accept: '*/*' }, body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: a.refresh_token, client_id: CLIENT_ID }), signal: AbortSignal.timeout(25000) });
     const j = await r.json().catch(() => ({}));
     if (r.status === 200 && j.access_token) {
       if (j.refresh_token && j.refresh_token !== a.refresh_token) await rpc('leads_set_mobile_token_value', { p_label: a.label, p_refresh_token: j.refresh_token }).catch(() => {});
