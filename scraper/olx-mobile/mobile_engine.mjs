@@ -16,8 +16,8 @@ const PROXY_USER = (process.env.PROXY_USER || '').trim();
 const PROXY_PASS = (process.env.PROXY_PASS || '').trim();
 const PROXY_PORT = (process.env.PROXY_PORT || '12323').trim();
 
-const BURST_MIN = Number(process.env.BURST_MIN || 8);
-const BURST_MAX = Number(process.env.BURST_MAX || 12);
+const BURST_MIN = Number(process.env.BURST_MIN || 6);
+const BURST_MAX = Number(process.env.BURST_MAX || 8);
 const COOL_MIN = Number(process.env.COOL_MIN || 110);   // min chłodzenia (min)
 const COOL_MAX = Number(process.env.COOL_MAX || 140);
 const BLOCK_COOL_MIN = Number(process.env.BLOCK_COOL_MIN || 300); // po ścianie: 5-6h
