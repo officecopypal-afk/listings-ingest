@@ -126,7 +126,7 @@ async function burst(a) {
 
 // ── lock ──
 const HOLDER = `${process.env.GITHUB_RUN_ID || 'local'}-${crypto.randomBytes(3).toString('hex')}`;
-const LOCK_TTL = 1200;
+const LOCK_TTL = 1800; // 30 min — z zapasem na dłuższą iterację przy K=3 (partia 3 serii równolegle)
 async function keepLock() { return rpc('leads_mobile_try_lock', { p_holder: HOLDER, p_ttl_sec: LOCK_TTL }).catch(() => false); }
 
 // ── main ──
@@ -179,6 +179,7 @@ while (!overBudget()) {
       await rpc('leads_set_mobile_next', { p_label: a.label, p_minutes: randI(COOL_MIN, COOL_MAX) }).catch(() => {});
     }
   }));
+  await keepLock().catch(() => {}); // odśwież heartbeat po partii — singleton pewny nawet przy dłuższej partii K=3
   await sleep(randMs(INTER_BURST_MIN * 60000, INTER_BURST_MAX * 60000)); // odstęp między partiami
 }
 await rpc('leads_mobile_release', { p_holder: HOLDER }).catch(() => {});
