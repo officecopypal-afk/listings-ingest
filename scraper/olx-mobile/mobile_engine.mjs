@@ -40,6 +40,8 @@ const overBudget = () => (Date.now() - t0) / 60000 >= BUDGET_MIN;
 
 async function rpc(fn, body) { const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }); const t = await r.text(); if (!r.ok) throw new Error(`${fn} ${r.status} ${t.slice(0, 90)}`); return t ? JSON.parse(t) : null; }
 async function slack(text) { try { await fetch(`${SB_URL}/functions/v1/scraper-alert`, { method: 'POST', headers: { authorization: `Bearer ${SB_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ text }) }); } catch {} }
+// Wyłącznik z panelu (flaga w Supabase). Błąd odczytu → true (nie ubijaj silnika na chwilowym błędzie sieci).
+async function revealEnabled() { try { return (await rpc('leads_reveal_control_get', {})) !== false; } catch { return true; } }
 
 const B62 = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const decode62 = (s) => { let n = 0n; for (const c of s) { const i = B62.indexOf(c); if (i < 0) return null; n = n * 62n + BigInt(i); } return n.toString(); };
@@ -110,6 +112,7 @@ async function burst(a) {
   const rows = await rpc('leads_claim_reveal_queue', { p_portal: 'olx', p_limit: N, p_claim_min: CLAIM_MIN }).catch(() => []);
   console.log(`  [${a.label}] ${a.dev.m}/iOS${a.dev.ios} (${a.ip}) → seria ${rows.length}/${N}`);
   for (const row of rows) {
+    if (!(await revealEnabled())) { console.log(`  [${a.label}] ⏹ flaga OFF — przerywam serię`); break; }
     const adId = adIdFromUrl(row.url); if (!adId) continue;
     let res; try { res = await reveal(a, adId); } catch { s.err++; await sleep(randMs(GAP_MIN_MS, GAP_MAX_MS)); continue; }
     if (res.kind === 'ok') { s.ok++; try { const ing = await rpc('leads_ingest_offer', { p_offer: { url: row.url, portal: 'olx', portal_listing_id: adId, property_type: row.property_type, transaction_type: row.transaction_type, phone: normPhone(res.phone), raw: { source: 'olx-mobile', acct: a.label } } }); if (ing?.sms_status === 'queued') s.queued++; } catch {} }
@@ -132,10 +135,12 @@ async function keepLock() { return rpc('leads_mobile_try_lock', { p_holder: HOLD
 // ── main ──
 if (!SB_URL || !SB_KEY) { console.error('brak ENV SUPABASE'); process.exit(1); }
 if (!(await keepLock())) { console.log('inny run trzyma lock — wychodzę (dedup)'); process.exit(0); }
+if (!(await revealEnabled())) { console.log('⏹ reveal WYŁĄCZONY (flaga panelu) — wychodzę, zero reveli'); await rpc('leads_mobile_release', { p_holder: HOLDER }).catch(() => {}); process.exit(0); }
 console.log(`MOBILE ENGINE (scheduler) | lock ${HOLDER} | seria ${BURST_MIN}-${BURST_MAX} | chłodzenie ${COOL_MIN}-${COOL_MAX}min | budżet ${BUDGET_MIN}min ${DRY ? '| DRY' : ''}`);
 
 while (!overBudget()) {
   if (!(await keepLock())) { console.log('straciłem lock — wychodzę'); break; }
+  if (!(await revealEnabled())) { console.log('⏹ reveal wyłączony w trakcie (flaga panelu) — kończę run'); break; }
   let accounts = await loadAccounts().catch((e) => { console.error('load:', e.message); return []; });
 
   // przypisz losowy start (rozłożony na 2h) kontom bez harmonogramu → faza porozsuwana

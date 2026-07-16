@@ -3,7 +3,7 @@ name: OLX MOBILE reveal
 # Ciągłość = self-chain; backstop = cron godzinny; DEDUP = lock w Supabase (tylko 1 run pracuje, reszta wychodzi w sekundę).
 on:
   schedule:
-    - cron: "5 * * * *"    # backstop (crash-recovery) — główna ciągłość to łańcuch na końcu runu
+    - cron: "*/15 * * * *"  # co 15 min: launcher (gdy flaga ON) + szybki restart/wskrzeszenie z panelu. Gdy OFF run wychodzi od razu.
   workflow_dispatch:
     inputs:
       per_account:
@@ -50,8 +50,18 @@ jobs:
           BUDGET_MIN: ${{ github.event.inputs.budget_min || '330' }}
           CONCURRENCY: ${{ github.event.inputs.concurrency || '3' }}
         run: node mobile_engine.mjs
-      - name: łańcuch — następny run (ciągłość bez luki)
+      - name: łańcuch — następny run (tylko gdy reveal WŁĄCZONY flagą)
         if: ${{ success() }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run "OLX MOBILE reveal" --ref "${{ github.ref_name }}"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          EN=$(curl -s -X POST "$SUPABASE_URL/rest/v1/rpc/leads_reveal_control_get" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "content-type: application/json" -d '{}')
+          if [ "$EN" = "true" ]; then
+            gh workflow run "OLX MOBILE reveal" --ref "${{ github.ref_name }}"
+          else
+            echo "reveal WYŁĄCZONY (flaga) — nie łańcuchuję"
+          fi
