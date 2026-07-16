@@ -18,6 +18,13 @@ on:
 permissions:
   actions: write   # do samo-wywołania następnego runu (łańcuch)
   contents: read
+
+# TWARDA BRAMKA: tylko 1 run tego workflowa naraz + max 1 w kolejce.
+# Ucina runaway self-chaina — lock-held exity nie mnożą już runów, bo GitHub sam
+# odmawia startu kolejnego gdy jeden jest in_progress (a nadmiarowe pending zastępuje najnowszym).
+concurrency:
+  group: olx-mobile-reveal
+  cancel-in-progress: false
 jobs:
   reveal:
     runs-on: ubuntu-latest
