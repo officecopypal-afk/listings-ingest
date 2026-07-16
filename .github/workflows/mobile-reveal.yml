@@ -41,6 +41,7 @@ jobs:
           PER_ACCOUNT: ${{ github.event.inputs.per_account || '25' }}
           PAUSE_MIN: ${{ github.event.inputs.pause_min || '7' }}
           BUDGET_MIN: ${{ github.event.inputs.budget_min || '330' }}
+          CONCURRENCY: ${{ github.event.inputs.concurrency || '3' }}
         run: node mobile_engine.mjs
       - name: łańcuch — następny run (ciągłość bez luki)
         if: ${{ success() }}

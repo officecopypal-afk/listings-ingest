@@ -27,6 +27,8 @@ const GAP_MAX_MS = Number(process.env.GAP_MAX_MS || 120000);
 const INTER_BURST_MIN = Number(process.env.INTER_BURST_MIN || 2); // odstęp między seriami różnych kont (min)
 const INTER_BURST_MAX = Number(process.env.INTER_BURST_MAX || 6);
 const LOOP_MIN = Number(process.env.LOOP_MIN || 5);          // sprawdzanie „kto due" gdy nic nie ma
+const CONCURRENCY = Number(process.env.CONCURRENCY || 3);    // ile kont naraz (równolegle, każde niezależne)
+const CLAIM_MIN = Number(process.env.CLAIM_MIN || 20);       // na ile min „rezerwujemy" claim (> czas serii, bo równolegle)
 const BUDGET_MIN = Number(process.env.BUDGET_MIN || 330);
 const DRY = process.env.DRY === '1';                        // tryb testowy: nie rewelu, tylko pokaż harmonogram
 
@@ -105,7 +107,7 @@ async function burst(a) {
   try { await ensureToken(a); await rpc('leads_set_mobile_status', { p_label: a.label, p_status: 'ok' }).catch(() => {}); }
   catch (e) { console.log(`  [${a.label}] token pad: ${e.message}`); return { s, hitWall, tokenDead: a.dead }; }
   const N = randI(BURST_MIN, BURST_MAX);
-  const rows = await rpc('leads_claim_reveal_queue', { p_portal: 'olx', p_limit: N }).catch(() => []);
+  const rows = await rpc('leads_claim_reveal_queue', { p_portal: 'olx', p_limit: N, p_claim_min: CLAIM_MIN }).catch(() => []);
   console.log(`  [${a.label}] ${a.dev.m}/iOS${a.dev.ios} (${a.ip}) → seria ${rows.length}/${N}`);
   for (const row of rows) {
     const adId = adIdFromUrl(row.url); if (!adId) continue;
@@ -156,20 +158,28 @@ while (!overBudget()) {
     continue;
   }
 
-  const a = due[0];
-  if (DRY) { console.log(`  [${a.label}] DUE (DRY — nie rewelu)`); await rpc('leads_set_mobile_next', { p_label: a.label, p_minutes: randI(COOL_MIN, COOL_MAX) }).catch(() => {}); await sleep(3000); continue; }
-
-  const { s, hitWall } = await burst(a);
-  if (hitWall) {
-    const cool = randI(BLOCK_COOL_MIN, BLOCK_COOL_MAX);
-    await rpc('leads_set_mobile_blocked', { p_label: a.label, p_blocked: true }).catch(() => {});
-    await rpc('leads_set_mobile_next', { p_label: a.label, p_minutes: cool }).catch(() => {});
-    await slack(`🟡 OLX mobile: konto ${a.label} trafiło ścianę (podejrzana aktywność) — chłodzę ${cool}min`);
-  } else {
-    if (a.blocked_at && s.ok > 0) await rpc('leads_set_mobile_blocked', { p_label: a.label, p_blocked: false }).catch(() => {}); // odwisło
-    await rpc('leads_set_mobile_next', { p_label: a.label, p_minutes: randI(COOL_MIN, COOL_MAX) }).catch(() => {});
-  }
-  await sleep(randMs(INTER_BURST_MIN * 60000, INTER_BURST_MAX * 60000)); // odstęp między seriami różnych kont
+  // Równolegle do CONCURRENCY kont naraz. Każde konto niezależne: własny token/proxy/device/gapy,
+  // więc per-konto tempo (6-8/cooldown) się NIE zmienia → ryzyko ściany bez zmian. Claim jest
+  // atomowy (FOR UPDATE SKIP LOCKED) → konta nie wyrwą tego samego ogłoszenia.
+  const batch = due.slice(0, CONCURRENCY);
+  console.log(`▶ partia równoległa (${batch.length}): ${batch.map((x) => x.label).join(', ')}`);
+  await Promise.all(batch.map(async (a, i) => {
+    await sleep(randMs(0, 8000) + i * 1500); // jitter startu — konta nie ruszają w tej samej milisekundzie
+    if (DRY) { console.log(`  [${a.label}] DUE (DRY — nie rewelu)`); await rpc('leads_set_mobile_next', { p_label: a.label, p_minutes: randI(COOL_MIN, COOL_MAX) }).catch(() => {}); return; }
+    let res;
+    try { res = await burst(a); } catch (e) { console.log(`  [${a.label}] burst błąd: ${e.message}`); return; }
+    const { s, hitWall } = res;
+    if (hitWall) {
+      const cool = randI(BLOCK_COOL_MIN, BLOCK_COOL_MAX);
+      await rpc('leads_set_mobile_blocked', { p_label: a.label, p_blocked: true }).catch(() => {});
+      await rpc('leads_set_mobile_next', { p_label: a.label, p_minutes: cool }).catch(() => {});
+      await slack(`🟡 OLX mobile: konto ${a.label} trafiło ścianę (podejrzana aktywność) — chłodzę ${cool}min`);
+    } else {
+      if (a.blocked_at && s.ok > 0) await rpc('leads_set_mobile_blocked', { p_label: a.label, p_blocked: false }).catch(() => {}); // odwisło
+      await rpc('leads_set_mobile_next', { p_label: a.label, p_minutes: randI(COOL_MIN, COOL_MAX) }).catch(() => {});
+    }
+  }));
+  await sleep(randMs(INTER_BURST_MIN * 60000, INTER_BURST_MAX * 60000)); // odstęp między partiami
 }
 await rpc('leads_mobile_release', { p_holder: HOLDER }).catch(() => {});
 console.log('=== budżet wyczerpany — lock zwolniony, self-chain przejmie ===');
