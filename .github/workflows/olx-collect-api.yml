@@ -3,8 +3,7 @@ name: OLX collect API (Faza 1)
 # Filtruje prywatne (business=false), kategorie 14/15/18. Główny kolektor.
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"   # co 15 min — tanio (JSON), więc na bieżąco
+  # Schedule usunięty — trigger robi Supabase pg_cron co 15 min przez workflow_dispatch (odporny na auto-wyłączanie GH Actions po 60 dniach)
   workflow_dispatch:
     inputs:
       max_pages:
