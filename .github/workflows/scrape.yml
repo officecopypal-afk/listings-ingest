@@ -1,7 +1,6 @@
 name: Scrape Otodom
 on:
-  schedule:
-    - cron: "0 */3 * * *"
+  # Schedule usunięty — trigger robi Supabase pg_cron przez workflow_dispatch (odporny na auto-wyłączanie GH Actions po 60 dniach)
   workflow_dispatch: {}
 
 concurrency:
