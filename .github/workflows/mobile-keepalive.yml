@@ -1,8 +1,7 @@
 name: OLX MOBILE keep-alive
 # Trzyma konta ŻYWE bez skanowania — tylko odświeża tokeny 2×/dobę (zero reveali, zero ryzyka limitu).
 on:
-  schedule:
-    - cron: "0 6,18 * * *"    # 2×/dobę (06:00 i 18:00 UTC) — lekkie, ~30s
+  # Schedule usunięty — trigger robi Supabase pg_cron 2×/dobę przez workflow_dispatch (odporny na auto-wyłączanie GH Actions po 60 dniach)
   workflow_dispatch:
 jobs:
   keepalive:
