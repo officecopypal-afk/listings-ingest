@@ -2,8 +2,7 @@ name: OLX MOBILE reveal
 # Silnik mobilny: czysty HTTP przez residential proxy (per konto), bez przeglądarki/captchy.
 # Ciągłość = self-chain; backstop = cron godzinny; DEDUP = lock w Supabase (tylko 1 run pracuje, reszta wychodzi w sekundę).
 on:
-  schedule:
-    - cron: "*/15 * * * *"  # co 15 min: launcher (gdy flaga ON) + szybki restart/wskrzeszenie z panelu. Gdy OFF run wychodzi od razu.
+  # Schedule usunięty — launcher/backstop (co 15 min) robi Supabase pg_cron przez workflow_dispatch; concurrency trzyma 1 run. Odporny na auto-wyłączanie GH Actions po 60 dniach.
   workflow_dispatch:
     inputs:
       per_account:
