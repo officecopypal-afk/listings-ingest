@@ -68,7 +68,7 @@ for (const job of jobs || []) {
   const cfg = CAT[`${job.property_type}|${job.transaction_type}`];
   if (!cfg) { console.warn(`[${job.name}] brak mapowania category_id — pomijam`); continue; }
   const runId = await rpc('leads_start_run', { p_job_id: job.id });
-  let pagesN = 0, found = 0, added = 0;
+  let pagesN = 0, found = 0, added = 0, skippedNoId = 0;
   const seen = new Set();
   try {
     // skanuj aż 2 strony Z RZĘDU bez NOWYCH = dogoniliśmy poprzedni zbiór (nakładka → zero luki).
@@ -86,10 +86,14 @@ for (const job of jobs || []) {
         if (o.business !== false) continue;              // tylko prywatne
         if (cutoffMs && (!o.created_time || new Date(o.created_time).getTime() < cutoffMs)) continue; // backfill: tylko WYSTAWIONE od daty
         const url = (o.url || '').split('?')[0].split('#')[0];
-        const pid = listingId(url);
+        const pid = listingId(url);                       // base62 z URL — TYLKO do dedupu w obrębie runu
         if (!pid || seen.has(pid)) continue;
+        // INCYDENT 21.07.2026: NIE rekonstruujemy ad_id z URL-a (base62 dekodował się błędnie dla części
+        // znaków → reveal pobierał numer OBCEGO ogłoszenia). API podaje prawdziwe numeryczne id — bierzemy je.
+        const adId = (o.id != null && /^\d+$/.test(String(o.id))) ? String(o.id) : null;
+        if (!adId) { skippedNoId++; continue; }            // bez pewnego id nie zbieramy — lepiej stracić lead niż zadzwonić do obcej osoby
         seen.add(pid); found++;
-        const offer = { url, portal: 'olx', portal_listing_id: pid, property_type: job.property_type, transaction_type: job.transaction_type, title: (o.title || '').replace(/\s+/g, ' ').trim().slice(0, 140), posted_at: o.created_time || null, phone: null, raw: { source: 'olx-collector-api' } };
+        const offer = { url, portal: 'olx', portal_listing_id: adId, property_type: job.property_type, transaction_type: job.transaction_type, title: (o.title || '').replace(/\s+/g, ' ').trim().slice(0, 140), posted_at: o.created_time || null, phone: null, raw: { source: 'olx-collector-api' } };
         try {
           const res = await rpc('leads_ingest_offer', { p_offer: offer });
           if (res?.listing_is_new) { added++; newThisPage++; }
@@ -104,7 +108,7 @@ for (const job of jobs || []) {
       await sleep(300 + Math.random() * 500);
     }
     await rpc('leads_finalize_run', { p_run_id: runId, p_job_id: job.id, p_status: 'success', p_pages: pagesN, p_listings_found: found, p_listings_new: added, p_phones_new: 0, p_error: null });
-    console.log(`[${job.name}] ✓ pages=${pagesN} found=${found} new=${added}`);
+    console.log(`[${job.name}] ✓ pages=${pagesN} found=${found} new=${added}${skippedNoId ? ` (pominięte bez id: ${skippedNoId})` : ''}`);
     jobOk++;
   } catch (e) {
     console.error(`[${job.name}] ✗`, String(e.message).slice(0, 200));

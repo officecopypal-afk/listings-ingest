@@ -43,9 +43,9 @@ async function slack(text) { try { await fetch(`${SB_URL}/functions/v1/scraper-a
 // Wyłącznik z panelu (flaga w Supabase). Błąd odczytu → true (nie ubijaj silnika na chwilowym błędzie sieci).
 async function revealEnabled() { try { return (await rpc('leads_reveal_control_get', {})) !== false; } catch { return true; } }
 
-const B62 = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-const decode62 = (s) => { let n = 0n; for (const c of s) { const i = B62.indexOf(c); if (i < 0) return null; n = n * 62n + BigInt(i); } return n.toString(); };
-const adIdFromUrl = (u) => { const m = u.match(/-ID([0-9A-Za-z]+)\.html/i); return m ? decode62(m[1]) : null; };
+
+
+// adIdFromUrl/decode62 USUNIĘTE 21.07.2026 — źródło incydentu z obcymi numerami (patrz komentarz w burst()).
 const normPhone = (s) => { const d = String(s).replace(/\D/g, ''); if (d.length === 9) return '+48' + d; if (d.length === 11 && d.startsWith('48')) return '+' + d; return d.length >= 9 ? '+48' + d.slice(-9) : null; };
 
 // Profil urządzenia per konto (iOS + build różny → UA nie identyczne). Model tylko dla ewidencji (nie ma go w UA).
@@ -104,7 +104,7 @@ async function reveal(a, adId) {
 }
 
 async function burst(a) {
-  const s = { ok: 0, empty: 0, gone: 0, wall: 0, err: 0, queued: 0 };
+  const s = { ok: 0, empty: 0, gone: 0, wall: 0, err: 0, queued: 0, skipNoId: 0 };
   let hitWall = false;
   try { await ensureToken(a); await rpc('leads_set_mobile_status', { p_label: a.label, p_status: 'ok' }).catch(() => {}); }
   catch (e) { console.log(`  [${a.label}] token pad: ${e.message}`); return { s, hitWall, tokenDead: a.dead }; }
@@ -113,7 +113,11 @@ async function burst(a) {
   console.log(`  [${a.label}] ${a.dev.m}/iOS${a.dev.ios} (${a.ip}) → seria ${rows.length}/${N}`);
   for (const row of rows) {
     if (!(await revealEnabled())) { console.log(`  [${a.label}] ⏹ flaga OFF — przerywam serię`); break; }
-    const adId = adIdFromUrl(row.url); if (!adId) continue;
+    // INCYDENT 21.07.2026: NIE dekodujemy już ad_id z URL-a (base62 mylił się na części znaków →
+    // pytaliśmy OLX o numer OBCEGO ogłoszenia, ~14% numerów było cudzych). Ufamy WYŁĄCZNIE
+    // numerycznemu portal_listing_id, które kolektor bierze wprost z API OLX. Brak/nienumeryczne = pomijamy.
+    const adId = String(row.portal_listing_id || '');
+    if (!/^\d+$/.test(adId)) { s.skipNoId++; continue; }
     let res; try { res = await reveal(a, adId); } catch { s.err++; await sleep(randMs(GAP_MIN_MS, GAP_MAX_MS)); continue; }
     if (res.kind === 'ok') { s.ok++; try { const ing = await rpc('leads_ingest_offer', { p_offer: { url: row.url, portal: 'olx', portal_listing_id: adId, property_type: row.property_type, transaction_type: row.transaction_type, phone: normPhone(res.phone), raw: { source: 'olx-mobile', acct: a.label } } }); if (ing?.sms_status === 'queued') s.queued++; } catch {} }
     else if (res.kind === 'empty') { s.empty++; await rpc('leads_mark_reveal_fail', { p_id: row.id, p_minutes: 180, p_reason: 'no_phone' }).catch(() => {}); }
