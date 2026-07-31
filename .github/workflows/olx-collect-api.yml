@@ -10,8 +10,8 @@ on:
         description: "Sufit stron API na job (stop po 2 str. bez nowych)"
         default: "20"
       no_proxy:
-        description: "true = pomiń proxy (test/awaria IPRoyal), leci z IP runnera"
-        default: "false"
+        description: "true = pomiń proxy (leci z IP runnera). DOMYŚLNIE true od 31.07.2026 — proxy IPRoyal padło 25.07 (fetch failed) i zatrzymało zbieranie na 6,5 dnia. Wrócić na 'false' po naprawie/odnowieniu IPRoyal."
+        default: "true"
 
 concurrency:
   group: olx-collect-api
