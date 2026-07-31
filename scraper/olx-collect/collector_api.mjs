@@ -50,14 +50,25 @@ const LIMIT = 50;
 async function apiPage(cat, secondary, offset) {
   let u = `https://www.olx.pl/api/v1/offers/?offset=${offset}&limit=${LIMIT}&category_id=${cat}&sort_by=created_at%3Adesc`;
   if (secondary) u += '&filter_enum_market%5B0%5D=secondary';
+  let lastErr = '';
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const r = await fetch(u, { headers: apiH, dispatcher, signal: AbortSignal.timeout(25000) });
-      if (!r.ok) return null;                          // cap paginacji / HTTP błąd → koniec scope
+      if (!r.ok) {
+        // DIAGNOSTYKA (31.07.2026): wcześniej `return null` po cichu — kolektor przez 6 dni
+        // raportował "success, 0 nowych" i nikt nie widział, że OLX/proxy odrzuca requesty.
+        const body = await r.text().catch(() => '');
+        console.error(`  API ${r.status} ${r.statusText} (offset=${offset}, cat=${cat}) :: ${body.slice(0, 160).replace(/\s+/g, ' ')}`);
+        return null;                                   // cap paginacji / HTTP błąd → koniec scope
+      }
       return (await r.json())?.data || [];
-    } catch { dispatcher = makeDispatcher(); await sleep(800); } // proxy padł (terminated/fetch failed) → świeży agent + retry
+    } catch (e) {
+      lastErr = String(e?.message || e).slice(0, 120);
+      dispatcher = makeDispatcher(); await sleep(800);  // proxy padł → świeży agent + retry
+    }
   }
-  return null;                                          // proxy nie wstał po 4 próbach → koniec scope (partial, bez crasha)
+  console.error(`  API nieosiągalne po 4 próbach (offset=${offset}, cat=${cat}) :: ${lastErr}`);
+  return null;                                          // koniec scope (partial, bez crasha)
 }
 
 const jobs = await rpc('leads_get_active_jobs', { p_portal: 'olx' });
