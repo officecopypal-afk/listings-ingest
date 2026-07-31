@@ -15,7 +15,9 @@
 import { ProxyAgent } from 'undici';
 import crypto from 'crypto';
 
-const PROXY = process.env.IPROYAL_PROXY;
+// NO_PROXY_MODE=true → jedziemy z IP runnera (ścieżka awaryjna gdy proxy padnie).
+// Uwaga na pułapkę GHA: pusty string jest falsy w `a && '' || b`, dlatego osobna zmienna.
+const PROXY = process.env.NO_PROXY_MODE === 'true' ? '' : process.env.IPROYAL_PROXY;
 const SB_URL = (process.env.SUPABASE_URL || '').trim();
 const SB_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 const MAX_PAGES = Number(process.env.MAX_PAGES || 20); // sufit; realnie stop po 2 stronach bez nowych / na granicy okna

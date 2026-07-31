@@ -32,7 +32,8 @@ jobs:
       - run: npm install --no-audit --no-fund
       - name: collect (API)
         env:
-          IPROYAL_PROXY: ${{ github.event.inputs.no_proxy == 'true' && '' || secrets.IPROYAL_PROXY }}
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          NO_PROXY_MODE: ${{ github.event.inputs.no_proxy || 'false' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           MAX_PAGES: ${{ github.event.inputs.max_pages || '20' }}
