@@ -65,7 +65,13 @@ async function pilot(acc, adId) {
   try {
     const r = await fetch('https://api.ipify.org?format=json', { dispatcher: agent, signal: AbortSignal.timeout(20000) });
     out.nowy_ip = (await r.json()).ip;
-  } catch (e) { out.nowy_ip = `BŁĄD: ${String(e.message).slice(0, 40)}`; return out; }
+  } catch (e) {
+    // `fetch failed` samo w sobie nic nie mówi — dopiero cause rozróżnia wygasły pakiet
+    // (407/ECONNRESET) od martwego hosta (ENOTFOUND/ECONNREFUSED).
+    const c = e.cause || {};
+    out.nowy_ip = `BŁĄD: ${String(e.message).slice(0, 30)} | powód: ${c.code || c.message || 'brak'}`;
+    return out;
+  }
 
   // 2. czy nowy adres przechodzi CloudFront (bez konta, bez tokenu)
   try {
@@ -131,6 +137,27 @@ const targets = await fetch(
 ).then((r) => r.json());
 
 console.log(`PILOT re-IP — konta: ${labels.join(', ')} | zapis do bazy: ${APPLY ? 'TAK' : 'NIE (tylko test)'}\n`);
+
+// Czy sam gateway w ogóle żyje (host zamaskowany — to sekret).
+{
+  const maskedHost = PHOST.replace(/^[^.]+/, '***');
+  try {
+    const { lookup } = await import('node:dns/promises');
+    const a = await lookup(PHOST);
+    console.log(`gateway ${maskedHost}:${PPORT} → DNS OK (${a.address})`);
+  } catch (e) { console.log(`gateway ${maskedHost}:${PPORT} → DNS PADŁ: ${e.code || e.message}`); }
+  try {
+    const net = await import('node:net');
+    await new Promise((res, rej) => {
+      const s = net.connect({ host: PHOST, port: Number(PPORT), timeout: 10000 });
+      s.on('connect', () => { s.end(); res(); });
+      s.on('timeout', () => { s.destroy(); rej(new Error('TIMEOUT')); });
+      s.on('error', rej);
+    });
+    console.log('gateway TCP → połączenie przyjęte (host żyje, problem jest w autoryzacji/pakiecie)');
+  } catch (e) { console.log(`gateway TCP → ODRZUCONE: ${e.code || e.message}`); }
+  console.log('');
+}
 
 const results = [];
 for (let i = 0; i < labels.length; i++) {
