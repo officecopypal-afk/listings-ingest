@@ -29,8 +29,11 @@ const pm = PROXY.match(/^https?:\/\/([^:]+):([^@]+)@([^:]+):(\d+)$/);
 if (!pm) { console.error('IPROYAL_PROXY w złym formacie'); process.exit(1); }
 const [, PUSER, PPASS, PHOST, PPORT] = pm;
 
+// NO_PROXY=1 → jedziemy z IP runnera (ścieżka, którą kolektor przechodzi CloudFront).
+// UWAGA: konto pokazuje się wtedy z adresu datacenter — testujemy na JEDNYM koncie.
+const NO_PROXY = process.env.NO_PROXY === '1';
 const passFor = (key) => `${PPASS}_country-pl_session-${key}_lifetime-${LIFETIME}`;
-const agentFor = (key) => new ProxyAgent(`http://${PUSER}:${passFor(key)}@${PHOST}:${PPORT}`);
+const agentFor = (key) => (NO_PROXY ? undefined : new ProxyAgent(`http://${PUSER}:${passFor(key)}@${PHOST}:${PPORT}`));
 
 async function rpc(fn, body) {
   const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, {
