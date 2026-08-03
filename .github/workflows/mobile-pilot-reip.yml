@@ -1,0 +1,33 @@
+name: OLX MOBILE pilot re-IP (diagnostyka)
+# Pilot: daje kilku kontom świeży exit ze sticky sesji IPRoyal i sprawdza, czy wraca reveal.
+# Bez concurrency group — NIE koliduje z runem reveala (mobile-reveal.yml trzyma własnego locka w DB).
+# apply=false → czysty test, zero zapisu. apply=true → zapisuje TYLKO konta, które przeszły.
+on:
+  workflow_dispatch:
+    inputs:
+      accounts:
+        description: "Konta oddzielone spacją, np. slot3 slot10 slot20"
+        default: "slot3 slot10 slot20"
+      apply:
+        description: "Zapisać nowe proxy do bazy dla kont, które przejdą? (true/false)"
+        default: "false"
+jobs:
+  pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: scraper/olx-mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install undici --no-audit --no-fund
+      - name: pilot re-IP
+        env:
+          IPROYAL_PROXY: ${{ secrets.IPROYAL_PROXY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APPLY: ${{ github.event.inputs.apply == 'true' && '1' || '0' }}
+        run: node pilot_reip.mjs ${{ github.event.inputs.accounts }}
